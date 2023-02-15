@@ -1,0 +1,296 @@
+---
+title: "CPBS 7630 - Module 1"
+date: "January 30, 2018"
+output: html_document
+---
+
+---
+
+#### Contents:
+
+* [Accessing Synapse data](#synapse)
+* [Cleaning data](#cleaning)
+* [Feature selection](#feature_selection)
+* [Data imputation](#imputation)
+* [Machine learning](#ml)
+* [Evaluation](#evaluation)
+
+---
+
+<a name="synapse"/>
+
+### Accessing Synapse data
+
+For this course, we will be using drug sensitivity data from [Costello, et al. A Community Effort to Assess and Improve Drug Sensitivity Prediction Algorithms (2014)](http://www.nature.com/nbt/journal/v32/n12/full/nbt.2877.html). This [data set](https://www.synapse.org/#!Synapse:syn2785783) consists of gene expression measurements for 44 breast cancer cell lines, and the dose-response values of growth inhibition for each cell line exposed to 28 therapeutic compounds. 
+
+```{r, echo = F, message = F}
+library(synapseClient)
+
+# Log in to Synapse
+#synapseLogin(username = 'myusername', password = 'mypassword')
+```
+
+```{r, message = F}
+
+library(synapseClient)
+synapseLogin(username = 'james.costello', password = 'Hammer70m$')
+
+# Get gene expression data from the DREAM7 challenge
+DREAM7.expression.data <- synGet('syn2785861')
+local.file.path <- DREAM7.expression.data@filePath
+expression.data <- read.delim(local.file.path, 
+                              header = T, 
+                              stringsAsFactors = F,
+                              check.names = F)
+
+# Raw expression data consists of cell lines and genes
+dim(expression.data)
+
+# Get the drug response data from Synpase, training and test sets
+DREAM7.train <- synGet('syn2785850')
+train.data <- read.table(getFileLocation(DREAM7.train), 
+                         header = T, 
+                         sep='\t', 
+                         row.names = 1,
+                         stringsAsFactors = F)
+
+DREAM7.test <- synGet('syn2785837')
+test.data <- read.table(getFileLocation(DREAM7.test),
+                        header = T,
+                        sep='\t', 
+                        row.names = 1, 
+                        stringsAsFactors = F)
+
+# Concatenate the drug response data for train and test set
+drug.response <- rbind(test.data,train.data)
+
+# Pull out data on one drug (Drug 7) to use for the exercise in the last section
+drug7.response <- drug.response$Drug7
+names(drug7.response) = row.names(drug.response)
+
+```
+
+<a name="cleaning"/>
+
+### Cleaning data
+
+Some common steps for data cleaning include checking for duplicated names, converting your data into matrix form, and performing any necessary normalization or transformation. 
+
+```{r}
+
+# Store gene names for later, remove non-numeric data
+genes <- expression.data$HGNC_ID
+expression.data$Ensembl_ID <- NULL
+expression.data$HGNC_ID <- NULL
+
+# Transform into matrix of samples (cell lines) by features
+expression.data <- t(expression.data)
+colnames(expression.data) <- genes
+
+# Check for NA values
+sum(is.na(expression.data))
+
+# Log transform
+expression.data <- log2(expression.data+1)
+
+# Get rid of a duplicated gene name
+expression.data <- expression.data[, !duplicated(colnames(expression.data))]
+```
+
+<a name="feature_selection"/>
+
+### Feature selection
+
+Selecting relevant and predictive features, or filtering out uninformative features, can often improve the speed and accuracy of a model. For now, we will demonstrate a simple filtering step.
+
+```{r}
+
+# Keep 5,000 genes with highest variance
+top.by.var <- expression.data[,order(apply(expression.data, 2, var), decreasing = T)][,1:500]
+
+# Alternatively, keep 5,000 genes with highest coefficient of variation
+CV <- function(vec){
+  return(sd(vec)/mean(vec))
+}
+top.by.cv <- expression.data[,order(apply(expression.data, 2, CV), decreasing = T)][,1:500]
+
+### TODO: Summarize and compare top gene lists from by var and c.v. methods above ###
+
+```
+
+<a name="imputation"/>
+
+### Data imputation
+
+To explore using imputation for missing data, we'll randomly delete a certain percentage of our sensitivity data and impute it. We will visualize the performance of the imputation with varying degrees of missing data by plotting the mean squared error (MSE).
+
+$MSE = \frac{1}{n}\sum^{n}_{i=1}(\hat{Y}_i - Y_i)^2$
+
+
+```{r, message = F, warning = F}
+
+#source("http://bioconductor.org/biocLite.R")
+#biocLite("impute")
+
+library(impute)
+
+MSE <- function(yhat, y){
+    squared.error <- sum(mapply(function(yhat,y) (yhat-y)^2, yhat, y))
+    return(squared.error/length(yhat))
+  }
+
+# Initialize vectors for plotting
+thresholds = c()
+errors = c()
+
+for (percent in seq(.01, .50, by = .05)){
+
+  expression.temp <- expression.data
+
+  # Calculate the percentage of the data to delete
+  obs.total <- length(expression.temp)
+  obs.to.delete <- round(percent * obs.total)
+  
+  # Store the deleted values before converting them to NAs
+  deleted.idx <- sample.int(obs.total, obs.to.delete)
+  deleted.values <- expression.temp[deleted.idx]
+  expression.temp[deleted.idx] <- NA
+  
+  # Impute missing data with knn algorithm
+  imputed.data <- impute.knn(expression.temp, k = round(nrow(expression.data)/10))
+  imputed.values <- imputed.data$data[deleted.idx]
+  
+  ### TODO: Impute missing data with 2 other algorithms ###
+  
+  # Evaluate performance with MSE
+  mse <- MSE(imputed.values, deleted.values)
+  
+  thresholds = c(thresholds, percent)
+  errors = c(errors, mse)
+
+}
+
+# Visualize MSE with differing proportions of missing data
+plot(thresholds, errors, type = 'b', col = 'skyblue', pch = 19,
+     xlab = 'Proportion missing data', ylab = 'Mean squared error')
+
+### TODO: Add two more lines to the plot to visualize the new imputation methods ###
+# Hint: can use lines(x, y, type = 'b') or plot() with the add = T parameter
+# Use colors() to see list of possible colors in the base plotting system
+
+```
+
+<a name="ml"/>
+
+### Machine learning
+
+We have two necessary parts now: a cleaned data set of observed data ($X$) and a response vector ($Y$). In order to learn the coefficients ($\beta$) of a predictive model, we can use any number of supervised or unsupervised machine learning algorithms for classification or regression. Below are two simple regression examples.
+
+```{r, message = F, warning = F}
+
+# Can use caret::train, but we will discuss alternatives too
+# install.packages("caret")
+library(caret)
+
+# Keep the cell lines that have values both for gene expression and response
+drug7.response <- na.omit(drug7.response)
+cell.lines <- intersect(row.names(expression.data), 
+                        names(drug7.response))
+
+# Subset and order the data by the cell lines we have
+# (Using the 5,000 genes we selected earlier for a smaller data set)
+expression.data <- top.by.var[cell.lines,]
+drug7.response <- drug7.response[cell.lines]
+
+# Concatenate expression data and response vector for later
+combined.data <- cbind(expression.data, Response = drug7.response)
+
+# Split cell lines into training and test set
+percent.training = .75
+n = length(cell.lines)
+
+inTrain <- sample(n, n * percent.training)
+training <- combined.data[inTrain,]
+testing  <- combined.data[-inTrain,]
+
+# Train a linear model
+lm.fit <- train(Response ~ ., 
+                data = training,
+                method = 'lm')
+lm.fit
+
+# Test on our testing data set
+#lm.preds <- predict(lm.fit, newdata = testing)
+#mse.lm <- MSE(yhat = lm.preds, y = testing[,'Response'])
+
+### TODO: try different training and test set sizes ###
+# Think about other performance metrics
+
+```
+
+### Evaluation
+
+With this data set, we are predicting on a continuous response. However, to demonstrate evaluation metrics for classification problems, we can instead imagine trying to classify cell lines depending on whether they are sensitive to the drug or not.
+
+```{r, message = F}
+# install.packages("ROCR")
+library(ROCR)
+
+# Summarize the drug response values
+summary(drug7.response)
+
+# Define sensitive cell lines and convert response to binary
+sensitive.cell.lines = cell.lines[drug7.response < 4.7]
+response = factor(row.names(expression.data) %in% sensitive.cell.lines)
+table(response)
+
+# Concatenate expression data and response vector for later
+combined.data <- cbind(expression.data, Response = response)
+
+# Re-split cell lines into training and test set
+percent.training = .75
+n = length(cell.lines)
+inTrain <- sample(n, n * percent.training)
+training <- combined.data[inTrain,]
+testing  <- combined.data[-inTrain,]
+
+# Classification with k-nearest neighbors
+# (How could we pick a better k?)
+knn.fit <- knn3(training, response[inTrain], k = 3)
+knn.fit
+knn.preds <- predict(knn.fit, newdata = testing, type = 'class')
+
+# Confusion matrix
+table(Predicted = knn.preds, Actual = response[-inTrain])
+      
+# Prediction probabilities of test data classes
+knn.probs <- predict(knn.fit, newdata = testing, type = 'prob')[,2]
+ # for an ROC curve there is a positive class (TRUE) - defining that class here
+pred <- prediction(knn.probs, response[-inTrain])
+perf <- performance(pred, 'tpr', 'fpr')
+auc.perf <- unlist(performance(pred, 'auc')@y.values)
+auc.report <- sprintf('AUC = %.2f', auc.perf)
+
+# Prepare to display two plots side by side
+par(mfrow = c(1,2))
+
+# Plot TPR/FPR ROC with diagonal line and legend
+plot(perf, main = 'ROC Curve', lwd = 2, col = 'red')
+abline(a = 0, b= 1)
+legend('bottomright', 
+       legend = c('knn', auc.report), 
+       lwd = c(2, 0),  
+       col = c('red', 'white'))
+
+# Plot precision/recall with legend
+perf2 <- performance(pred, 'prec', 'rec')
+plot(perf2, main = 'Precision/Recall Curve', lwd = 2, col = 'blue')
+legend('bottomleft', legend = 'knn', lwd = 2,  col = 'blue')
+
+
+```
+
+```{r tidy = T}
+sessionInfo()
+```
+
