@@ -267,9 +267,15 @@ for (percent in seq(.01, .50, by = .05)){
 
 # Visualize MSE with differing proportions of missing data
 
-  ggplot(aes(x = thresholds, y = mse)) +
+errors <- as.data.frame(cbind(thresholds = thresholds,
+                knn.errors = knn.errors,
+                min.errors = min.errors,
+                median.errors = median.errors))
+
+  ggplot(errors, aes(x = thresholds, y = knn.errors)) +
   geom_line(color = "skyblue") +
-  geom_point(color = "skyblue", fill = "white", size = 3, shape = 21) +
+      geom_line(aes(y = min.errors), color = "red") +
+      geom_line(aes(y = median.errors), color = "green") +
   xlab("Proportion missing data") +
   ylab("Mean squared error") +
   theme_minimal()
