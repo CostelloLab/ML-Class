@@ -244,8 +244,14 @@ for (percent in seq(.01, .50, by = .05)){
 ### TODO: Impute missing data with 2 other algorithms ###
     
 
-  imputed.min <- apply(expression.temp[,which(apply(expression.temp, 2, function(x) any(is.na(x))))], 2, min)
-  imputed.median <- apply(expression.temp[,which(apply(expression.temp, 2, function(x) any(is.na(x))))], 2, median)
+  imputed.min <- mapply(function(row, col) 
+                           return(min(expression.temp[,col], na.rm = T)), 
+                        row = row.sample, col = col.sample)
+    imputed.median <- mapply(function(row, col) 
+                           return(median(expression.temp[,col], na.rm = T)), 
+                        row = row.sample, col = col.sample)
+    
+  
   
   # Evaluate performance with MSE
   mse <- MSE(imputed.values, deleted.values)
@@ -260,7 +266,7 @@ for (percent in seq(.01, .50, by = .05)){
 }
 
 # Visualize MSE with differing proportions of missing data
-errors %>% 
+
   ggplot(aes(x = thresholds, y = mse)) +
   geom_line(color = "skyblue") +
   geom_point(color = "skyblue", fill = "white", size = 3, shape = 21) +
