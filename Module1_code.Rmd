@@ -145,28 +145,41 @@ Selecting relevant and predictive features, or filtering out uninformative featu
 
 ```{r}
 
-# Keep 5,000 genes with highest variance
-top.by.var <- expression.data %>% 
-  select_if(is.numeric) %>% 
-  summarize_all(var) %>% 
-  unlist() %>% 
-  sort(decreasing = TRUE) %>% 
-  names() %>% 
-  head(5000) %>% 
-  select(expression.data, .)
 
+# Keep 5,000 genes with highest variance
+top.by.var <- expression.data[,order(apply(expression.data, 2, var), decreasing = T)][,1:500]
 # Alternatively, keep 5,000 genes with highest coefficient of variation
 CV <- function(vec){
   return(sd(vec)/mean(vec))
 }
-top.by.cv <- expression.data %>% 
-  select_if(is.numeric) %>% 
-  summarize_all(CV) %>% 
-  unlist() %>% 
-  sort(decreasing = TRUE) %>% 
-  names() %>% 
-  head(5000) %>% 
-  select(expression.data, .)
+top.by.cv <- expression.data[,order(apply(expression.data, 2, CV), decreasing = T)][,1:500]
+### TODO: Summarize and compare top gene lists from by var and c.v. methods above ###
+
+## # Keep 5,000 genes with highest variance
+## top.by.var <- expression.data %>% 
+##   select_if(is.numeric) %>% 
+##   summarize_all(var) %>% 
+##   unlist() %>% 
+##   sort(decreasing = TRUE) %>% 
+##   names() %>% 
+##   head(5000) %>% 
+##   select(expression.data, .)
+
+## # Alternatively, keep 5,000 genes with highest coefficient of variation
+## CV <- function(vec){
+##   return(sd(vec)/mean(vec))
+## }
+## top.by.cv <- expression.data %>% 
+##   select_if(is.numeric) %>% 
+##   summarize_all(CV) %>% 
+##   unlist() %>% 
+##   sort(decreasing = TRUE) %>% 
+##   names() %>% 
+##   head(5000) %>% 
+##   select(expression.data, .)
+
+### added tghe tidyverse format, but it's super slow. why??
+
 
 
 ### TODO: Summarize and compare top gene lists from by var and c.v. methods above ###
