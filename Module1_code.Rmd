@@ -183,6 +183,14 @@ top.by.cv <- expression.data[,order(apply(expression.data, 2, CV), decreasing = 
 
 
 ### TODO: Summarize and compare top gene lists from by var and c.v. methods above ###
+var.rank <- as.data.frame(cbind(gene = colnames(top.by.var),var_rank = 1:500))
+cv.rank <- as.data.frame(cbind(gene = colnames(top.by.cv), cv_rank = 1:500))
+ranks <- var.rank %>%
+    full_join(cv.rank, by = "gene")
+
+
+ggplot(ranks, aes(x = var_rank, y = cv_rank)) +
+      geom_point()
 
 ```
 
@@ -198,7 +206,7 @@ $MSE = \frac{1}{n}\sum^{n}_{i=1}(\hat{Y}_i - Y_i)^2$
 ```{r, message = F, warning = F}
 
 #source("http://bioconductor.org/biocLite.R")
-#biocLite("impute")
+BiocManager::install("impute")
 
 library(impute)
 
@@ -209,7 +217,9 @@ MSE <- function(yhat, y){
 
 # Initialize vectors for plotting
 thresholds = c()
-errors = c()
+knn.errors = c()
+min.errors = c()
+median.errors = c()
 
 for (percent in seq(.01, .50, by = .05)){
 
@@ -217,24 +227,35 @@ for (percent in seq(.01, .50, by = .05)){
 
   # Calculate the percentage of the data to delete
   obs.total <- length(expression.temp)
-  obs.to.delete <- round(percent * obs.total)
-  
+  col.sample <- sample(1:ncol(expression.temp), round(ncol(expression.temp)* percent), replace = FALSE) 
+  row.sample <- sample(1:nrow(expression.temp), round(nrow(expression.temp)* percent), replace = FALSE)   
   # Store the deleted values before converting them to NAs
-  deleted.idx <- sample.int(obs.total, obs.to.delete)
-  deleted.values <- expression.temp[deleted.idx]
-  expression.temp[deleted.idx] <- NA
+    deleted.values = mapply(function(row, col) 
+                           return(expression.temp[row,col]), 
+                    row = row.sample, col = col.sample)
+
+    
   
+  expression.temp[row.sample, col.sample] <- NA
   # Impute missing data with knn algorithm
-  imputed.data <- impute.knn(expression.temp, k = round(nrow(expression.data)/10))
-  imputed.values <- imputed.data$data[deleted.idx]
+  imputed.data <- impute.knn(as.matrix(expression.temp), k = round(nrow(expression.data)/10))
+  imputed.values <- imputed.data$data[row.sample,col.sample]
   
-  ### TODO: Impute missing data with 2 other algorithms ###
+### TODO: Impute missing data with 2 other algorithms ###
+    
+
+  imputed.min <- apply(expression.temp[,which(apply(expression.temp, 2, function(x) any(is.na(x))))], 2, min)
+  imputed.median <- apply(expression.temp[,which(apply(expression.temp, 2, function(x) any(is.na(x))))], 2, median)
   
   # Evaluate performance with MSE
   mse <- MSE(imputed.values, deleted.values)
-  
+    min.mse <- MSE(imputed.min, deleted.values)
+    median.mse <- MSE(imputed.median, deleted.values)
+    
   thresholds = c(thresholds, percent)
-  errors = c(errors, mse)
+    knn.errors = c(knn.errors, mse)
+    min.errors = c(min.errors, min.mse)
+    median.errors = c(median.errors, median.mse)
 
 }
 
