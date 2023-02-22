@@ -17,60 +17,96 @@ output: html_document
 
 ---
 
-<a name="synapse"/>
+<!-- <a name="synapse"/> -->
 
-### Accessing Synapse data
+<!-- ### Accessing Synapse data -->
 
-For this course, we will be using drug sensitivity data from [Costello, et al. A Community Effort to Assess and Improve Drug Sensitivity Prediction Algorithms (2014)](http://www.nature.com/nbt/journal/v32/n12/full/nbt.2877.html). This [data set](https://www.synapse.org/#!Synapse:syn2785783) consists of gene expression measurements for 44 breast cancer cell lines, and the dose-response values of growth inhibition for each cell line exposed to 28 therapeutic compounds. 
+<!-- For this course, we will be using drug sensitivity data from [Costello, et al. A Community Effort to Assess and Improve Drug Sensitivity Prediction Algorithms (2014)](http://www.nature.com/nbt/journal/v32/n12/full/nbt.2877.html). This [data set](https://www.synapse.org/#!Synapse:syn2785783) consists of gene expression measurements for 44 breast cancer cell lines, and the dose-response values of growth inhibition for each cell line exposed to 28 therapeutic compounds.  -->
 
-```{r, echo = F, message = F}
-library(synapseClient)
+<!-- ```{r, echo = F, message = F} -->
+<!-- library(synapseClient) -->
 
-# Log in to Synapse
-#synapseLogin(username = 'myusername', password = 'mypassword')
-```
+<!-- # Log in to Synapse -->
+<!-- #synapseLogin(username = 'myusername', password = 'mypassword') -->
+<!-- ``` -->
 
-```{r, message = F}
+<!-- ```{r, message = F} -->
 
-library(synapseClient)
-synapseLogin(username = 'james.costello', password = 'Hammer70m$')
+<!-- library(synapseClient) -->
+<!-- synapseLogin(username = 'james.costello', password = 'Hammer70m$') -->
 
-# Get gene expression data from the DREAM7 challenge
-DREAM7.expression.data <- synGet('syn2785861')
-local.file.path <- DREAM7.expression.data@filePath
-expression.data <- read.delim(local.file.path, 
-                              header = T, 
-                              stringsAsFactors = F,
-                              check.names = F)
+<!-- # Get gene expression data from the DREAM7 challenge -->
+<!-- DREAM7.expression.data <- synGet('syn2785861') -->
+<!-- local.file.path <- DREAM7.expression.data@filePath -->
+<!-- expression.data <- read.delim(local.file.path,  -->
+<!--                               header = T,  -->
+<!--                               stringsAsFactors = F, -->
+<!--                               check.names = F) -->
 
-# Raw expression data consists of cell lines and genes
-dim(expression.data)
+<!-- # Raw expression data consists of cell lines and genes -->
+<!-- dim(expression.data) -->
 
-# Get the drug response data from Synpase, training and test sets
-DREAM7.train <- synGet('syn2785850')
-train.data <- read.table(getFileLocation(DREAM7.train), 
-                         header = T, 
-                         sep='\t', 
-                         row.names = 1,
-                         stringsAsFactors = F)
+<!-- # Get the drug response data from Synpase, training and test sets -->
+<!-- DREAM7.train <- synGet('syn2785850') -->
+<!-- train.data <- read.table(getFileLocation(DREAM7.train),  -->
+<!--                          header = T,  -->
+<!--                          sep='\t',  -->
+<!--                          row.names = 1, -->
+<!--                          stringsAsFactors = F) -->
 
-DREAM7.test <- synGet('syn2785837')
-test.data <- read.table(getFileLocation(DREAM7.test),
-                        header = T,
-                        sep='\t', 
-                        row.names = 1, 
-                        stringsAsFactors = F)
+<!-- DREAM7.test <- synGet('syn2785837') -->
+<!-- test.data <- read.table(getFileLocation(DREAM7.test), -->
+<!--                         header = T, -->
+<!--                         sep='\t',  -->
+<!--                         row.names = 1,  -->
+<!--                         stringsAsFactors = F) -->
 
-# Concatenate the drug response data for train and test set
-drug.response <- rbind(test.data,train.data)
+<!-- # Concatenate the drug response data for train and test set -->
+<!-- drug.response <- rbind(test.data,train.data) -->
 
-# Pull out data on one drug (Drug 7) to use for the exercise in the last section
-drug7.response <- drug.response$Drug7
-names(drug7.response) = row.names(drug.response)
+<!-- # Pull out data on one drug (Drug 7) to use for the exercise in the last section -->
+<!-- drug7.response <- drug.response$Drug7 -->
+<!-- names(drug7.response) = row.names(drug.response) -->
 
-```
+<!-- ``` -->
 
 <a name="cleaning"/>
+
+### Reading in DS data
+
+``` {r}
+library(tidyverse)
+library(ggplot2)
+
+comorbidities <- read.delim("../Projects/Code/DS-transfer/data/P4C_Comorbidity_020921.tsv", skip = 1)
+head(comorbidities)
+
+metadata <-read.delim("../Projects/Code/DS-transfer/data/P4C_metadata_021921_Costello.txt")
+head(metadata)
+
+comorbidities <- comorbidities %>%
+    select(RecordID, Condition, HasCondition) %>%
+    pivot_wider(names_from = Condition, values_from = HasCondition)
+
+
+meta <- metadata %>%
+    inner_join(comorbidities, by = "RecordID")
+head(meta)
+
+expression.data <- read.delim("../Projects/Code/DS-transfer/data/HTP_WholeBlood_RNAseq_FPKMs_Synapse.txt")
+expression.data <- expression.data %>%
+    select(LabID, Gene_name, Value) %>%
+    group_by(LabID) %>%
+    mutate(row = row_number()) %>%    
+    pivot_wider( names_from =c("Gene_name","row"), values_from = "Value")
+expression.data <- expression.data %>%
+    column_to_rownames( var = "LabID")
+
+
+dim(expression.data)
+
+```
+
 
 ### Cleaning data
 
@@ -79,22 +115,26 @@ Some common steps for data cleaning include checking for duplicated names, conve
 ```{r}
 
 # Store gene names for later, remove non-numeric data
-genes <- expression.data$HGNC_ID
-expression.data$Ensembl_ID <- NULL
-expression.data$HGNC_ID <- NULL
+## genes <- expression.data$HGNC_ID
+## expression.data$Ensembl_ID <- NULL
+## expression.data$HGNC_ID <- NULL
 
-# Transform into matrix of samples (cell lines) by features
-expression.data <- t(expression.data)
-colnames(expression.data) <- genes
+## # Transform into matrix of samples (cell lines) by features
+## expression.data <- t(expression.data)
+## colnames(expression.data) <- genes
 
 # Check for NA values
 sum(is.na(expression.data))
 
-# Log transform
-expression.data <- log2(expression.data+1)
+##  Convert expression data to log2 scale
+expression.data <- log2(expression.data + 1)
+## tried tidyverse, but was taking much longer
 
-# Get rid of a duplicated gene name
-expression.data <- expression.data[, !duplicated(colnames(expression.data))]
+# Remove duplicate gene names
+##expression.data <- expression.data %>% 
+##   select(-duplicated(names(expression.data)))
+
+
 ```
 
 <a name="feature_selection"/>
@@ -106,13 +146,28 @@ Selecting relevant and predictive features, or filtering out uninformative featu
 ```{r}
 
 # Keep 5,000 genes with highest variance
-top.by.var <- expression.data[,order(apply(expression.data, 2, var), decreasing = T)][,1:500]
+top.by.var <- expression.data %>% 
+  select_if(is.numeric) %>% 
+  summarize_all(var) %>% 
+  unlist() %>% 
+  sort(decreasing = TRUE) %>% 
+  names() %>% 
+  head(5000) %>% 
+  select(expression.data, .)
 
 # Alternatively, keep 5,000 genes with highest coefficient of variation
 CV <- function(vec){
   return(sd(vec)/mean(vec))
 }
-top.by.cv <- expression.data[,order(apply(expression.data, 2, CV), decreasing = T)][,1:500]
+top.by.cv <- expression.data %>% 
+  select_if(is.numeric) %>% 
+  summarize_all(CV) %>% 
+  unlist() %>% 
+  sort(decreasing = TRUE) %>% 
+  names() %>% 
+  head(5000) %>% 
+  select(expression.data, .)
+
 
 ### TODO: Summarize and compare top gene lists from by var and c.v. methods above ###
 
@@ -171,8 +226,15 @@ for (percent in seq(.01, .50, by = .05)){
 }
 
 # Visualize MSE with differing proportions of missing data
-plot(thresholds, errors, type = 'b', col = 'skyblue', pch = 19,
-     xlab = 'Proportion missing data', ylab = 'Mean squared error')
+errors %>% 
+  ggplot(aes(x = thresholds, y = mse)) +
+  geom_line(color = "skyblue") +
+  geom_point(color = "skyblue", fill = "white", size = 3, shape = 21) +
+  xlab("Proportion missing data") +
+  ylab("Mean squared error") +
+  theme_minimal()
+
+
 
 ### TODO: Add two more lines to the plot to visualize the new imputation methods ###
 # Hint: can use lines(x, y, type = 'b') or plot() with the add = T parameter
