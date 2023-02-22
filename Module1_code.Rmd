@@ -16,88 +16,58 @@ output: html_document
 * [Evaluation](#evaluation)
 
 ---
+### Data import
 
-<a name="synapse"/>
 
-### Accessing Synapse data
-
-For this course, we will be using drug sensitivity data from [Costello, et al. A Community Effort to Assess and Improve Drug Sensitivity Prediction Algorithms (2014)](http://www.nature.com/nbt/journal/v32/n12/full/nbt.2877.html). This [data set](https://www.synapse.org/#!Synapse:syn2785783) consists of gene expression measurements for 44 breast cancer cell lines, and the dose-response values of growth inhibition for each cell line exposed to 28 therapeutic compounds. 
-
-```{r, echo = F, message = F}
-library(synapseClient)
-
-# Log in to Synapse
-#synapseLogin(username = 'myusername', password = 'mypassword')
-```
 
 ```{r, message = F}
-
-library(synapseClient)
-synapseLogin(username = 'james.costello', password = 'Hammer70m$')
-
-# Get gene expression data from the DREAM7 challenge
-DREAM7.expression.data <- synGet('syn2785861')
-local.file.path <- DREAM7.expression.data@filePath
-expression.data <- read.delim(local.file.path, 
-                              header = T, 
-                              stringsAsFactors = F,
-                              check.names = F)
-
-# Raw expression data consists of cell lines and genes
-dim(expression.data)
-
-# Get the drug response data from Synpase, training and test sets
-DREAM7.train <- synGet('syn2785850')
-train.data <- read.table(getFileLocation(DREAM7.train), 
-                         header = T, 
-                         sep='\t', 
-                         row.names = 1,
-                         stringsAsFactors = F)
-
-DREAM7.test <- synGet('syn2785837')
-test.data <- read.table(getFileLocation(DREAM7.test),
-                        header = T,
-                        sep='\t', 
-                        row.names = 1, 
-                        stringsAsFactors = F)
-
-# Concatenate the drug response data for train and test set
-drug.response <- rbind(test.data,train.data)
-
+# Get gene expression data from cBioPortal
+library(cBioPortalData)
+library(dplyr)
+library(tidyr)
+library(tibble)
+cbio <- cBioPortal()
+studies <- getStudies(cbio)
+CCLE_info <- studies[55,]
+CCLE <- cBioDataPack("ccle_broad_2019", ask = FALSE)
+CCLE.mRNA <- as.tibble(unlist(CCLE@ExperimentList@listData$mrna_seq_rpkm@assays@data))
+CCLE.mRNA <- bind_cols(Hugo_Symbol = unlist(CCLE@ExperimentList@listData$mrna_seq_rpkm@elementMetadata$Hugo_Symbol),
+                       CCLE.mRNA)
+# Get the drug response data from cBio
+CCLE.response <- as_tibble(CCLE@ExperimentList@listData$drug_treatment_ic50@assays@data)
+CCLE.response <- CCLE.response %>% mutate(group_name = CCLE@ExperimentList@listData$drug_treatment_ic50@elementMetadata@listData$ENTITY_STABLE_ID) %>% select(-group)
+CCLE.response <- dplyr::rename(CCLE.response, IC50 = group_name)
 # Pull out data on one drug (Drug 7) to use for the exercise in the last section
-drug7.response <- drug.response$Drug7
-names(drug7.response) = row.names(drug.response)
-
+Bicalutamide.response <- CCLE.response %>% filter(IC50 == "Bicalutamide-1")
 ```
-
-<a name="cleaning"/>
 
 ### Cleaning data
 
 Some common steps for data cleaning include checking for duplicated names, converting your data into matrix form, and performing any necessary normalization or transformation. 
 
 ```{r}
-
 # Store gene names for later, remove non-numeric data
-genes <- expression.data$HGNC_ID
-expression.data$Ensembl_ID <- NULL
-expression.data$HGNC_ID <- NULL
+genes <- CCLE.mRNA %>% select(Hugo_Symbol)
 
-# Transform into matrix of samples (cell lines) by features
-expression.data <- t(expression.data)
-colnames(expression.data) <- genes
+# Remove duplicate genes
+CCLE.mRNA <- distinct(CCLE.mRNA)
+
+# Use Base R functions to: Transpose and transform data into tidyverse format
+# After, convert back to tidyverse df (tibble) and remove the first row
+CCLE.mRNA <- t(CCLE.mRNA)
+colnames(CCLE.mRNA) <- CCLE.mRNA[1,]
+CCLE.mRNA <- cbind(`Cell Line` = rownames(CCLE.mRNA), CCLE.mRNA)
+CCLE.mRNA <- as_tibble(CCLE.mRNA)
+CCLE.mRNA <- CCLE.mRNA %>% slice(-1)
 
 # Check for NA values
-sum(is.na(expression.data))
+sum(is.na(CCLE.mRNA))
 
-# Log transform
-expression.data <- log2(expression.data+1)
+# Log2 transform columns 2 through the last
+y <- CCLE.mRNA1 %>% select(1:5)
+data <- y %>% select(2:ncol(y)) %>% mutate(idk = y[2:ncol(y)])
 
-# Get rid of a duplicated gene name
-expression.data <- expression.data[, !duplicated(colnames(expression.data))]
 ```
-
-<a name="feature_selection"/>
 
 ### Feature selection
 
@@ -106,13 +76,13 @@ Selecting relevant and predictive features, or filtering out uninformative featu
 ```{r}
 
 # Keep 5,000 genes with highest variance
-top.by.var <- expression.data[,order(apply(expression.data, 2, var), decreasing = T)][,1:500]
+top.by.var <- CCLE.mRNA[,order(apply(CCLE.mRNA, 2, var), decreasing = T)][,1:500]
 
 # Alternatively, keep 5,000 genes with highest coefficient of variation
 CV <- function(vec){
   return(sd(vec)/mean(vec))
 }
-top.by.cv <- expression.data[,order(apply(expression.data, 2, CV), decreasing = T)][,1:500]
+top.by.cv <- CCLE.mRNA[,order(apply(CCLE.mRNA, 2, CV), decreasing = T)][,1:500]
 
 ### TODO: Summarize and compare top gene lists from by var and c.v. methods above ###
 
@@ -145,7 +115,7 @@ errors = c()
 
 for (percent in seq(.01, .50, by = .05)){
 
-  expression.temp <- expression.data
+  expression.temp <- CCLE.mRNA
 
   # Calculate the percentage of the data to delete
   obs.total <- length(expression.temp)
@@ -187,31 +157,28 @@ plot(thresholds, errors, type = 'b', col = 'skyblue', pch = 19,
 We have two necessary parts now: a cleaned data set of observed data ($X$) and a response vector ($Y$). In order to learn the coefficients ($\beta$) of a predictive model, we can use any number of supervised or unsupervised machine learning algorithms for classification or regression. Below are two simple regression examples.
 
 ```{r, message = F, warning = F}
-
-# Can use caret::train, but we will discuss alternatives too
-# install.packages("caret")
 library(caret)
-
+library(MLmetrics)
 # Keep the cell lines that have values both for gene expression and response
 drug7.response <- na.omit(drug7.response)
-cell.lines <- intersect(row.names(expression.data), 
+cell.lines <- intersect(row.names(CCLE.mRNA), 
                         names(drug7.response))
 
 # Subset and order the data by the cell lines we have
 # (Using the 5,000 genes we selected earlier for a smaller data set)
-expression.data <- top.by.var[cell.lines,]
+CCLE.mRNA <- top.by.var[cell.lines,]
 drug7.response <- drug7.response[cell.lines]
 
 # Concatenate expression data and response vector for later
-combined.data <- cbind(expression.data, Response = drug7.response)
+combined.data <- cbind(CCLE.mRNA, Response = drug7.response)
 
 # Split cell lines into training and test set
 percent.training = .75
 n = length(cell.lines)
 
 inTrain <- sample(n, n * percent.training)
-training <- combined.data[inTrain,]
-testing  <- combined.data[-inTrain,]
+training <- na.omit(combined.data[inTrain,])
+testing  <- na.omit(combined.data[-inTrain,])
 
 # Train a linear model
 lm.fit <- train(Response ~ ., 
@@ -220,8 +187,8 @@ lm.fit <- train(Response ~ .,
 lm.fit
 
 # Test on our testing data set
-#lm.preds <- predict(lm.fit, newdata = testing)
-#mse.lm <- MSE(yhat = lm.preds, y = testing[,'Response'])
+lm.preds <- predict(lm.fit, newdata = testing)
+mse.lm <- MSE(yhat = lm.preds, y = testing[,'Response'])
 
 ### TODO: try different training and test set sizes ###
 # Think about other performance metrics
@@ -241,11 +208,11 @@ summary(drug7.response)
 
 # Define sensitive cell lines and convert response to binary
 sensitive.cell.lines = cell.lines[drug7.response < 4.7]
-response = factor(row.names(expression.data) %in% sensitive.cell.lines)
+response = factor(row.names(CCLE.mRNA) %in% sensitive.cell.lines)
 table(response)
 
 # Concatenate expression data and response vector for later
-combined.data <- cbind(expression.data, Response = response)
+combined.data <- cbind(CCLE.mRNA, Response = response)
 
 # Re-split cell lines into training and test set
 percent.training = .75
