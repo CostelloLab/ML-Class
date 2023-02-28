@@ -130,13 +130,6 @@ expression.data <- expression.data %>%
     mutate(across(where(is.numeric), ~ .x + 1)) %>%
     log2()
 
-
-
-# Remove duplicate gene names
-##expression.data <- expression.data %>% 
-##   select(-duplicated(names(expression.data)))
-
-
 ```
 
 <a name="feature_selection"/>
@@ -155,18 +148,30 @@ CV <- function(vec){
 ## inputs: data       data.frame      expression data with genes in rows and samples in columns
 ##         statistic  string          "variance" or "cv"
 rankGenes <- function(data, statistic = "variance") {
-    ranks <- data %>%
-        filter(rownames(data) %in% c("A1BG_1", "A1BG-AS1_2")) %>%
-        summarise(m = rowSums(.))
+    if(statistic == "variance") {
+        ranks <- data %>%
+            summarise(across(everything(), var))%>%
+            sort(decreasing = TRUE) %>%
+            names()
+    } else {
+        ranks <- data %>%
+            summarise(across(everything(), CV)) %>%
+            sort(decreasing = TRUE) %>%
+            names()
+    }
+    return(ranks)
+} 
         
 
 
-top.by.cv <- expression.data[,order(apply(expression.data, 2, CV), decreasing = T)][,1:500]
-## Keep 5,000 genes with highest variance
+
+var.ranks <- rankGenes(expression.data, statistic = "variance")
+cv.ranks <- rankGenes(expression.data, statistic = "cv") ## not the same length as var.ranks. Dividing by 0
+
 
 ### TODO: Summarize and compare top gene lists from by var and c.v. methods above ###
-var.rank <- as.data.frame(cbind(gene = colnames(top.by.var),var_rank = 1:500))
-cv.rank <- as.data.frame(cbind(gene = colnames(top.by.cv), cv_rank = 1:500))
+var.rank <- as.data.frame(cbind(gene = var.ranks,var_rank = 1:length(var.ranks)))
+cv.rank <- as.data.frame(cbind(gene = cv.ranks, cv_rank = 1:length(cv.ranks))) 
 ranks <- var.rank %>%
     full_join(cv.rank, by = "gene")
 
