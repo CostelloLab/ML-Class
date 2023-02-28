@@ -93,15 +93,15 @@ meta <- metadata %>%
     inner_join(comorbidities, by = "RecordID")
 head(meta)
 
-expression.data <- read.delim("../Projects/Code/DS-transfer/data/HTP_WholeBlood_RNAseq_FPKMs_Synapse.txt")
-expression.data <- expression.data %>%
-    select(LabID, Gene_name, Value) %>%
+expression.profiles <- read.delim("../Projects/Code/DS-transfer/data/HTP_WholeBlood_RNAseq_Counts_Synapse.txt")
+expression.data <- expression.profiles %>%
+    select( LabID, EnsemblID,Value) %>%
     group_by(LabID) %>%
-    mutate(row = row_number()) %>%    
-    pivot_wider( names_from =c("Gene_name","row"), values_from = "Value")
-expression.data <- expression.data %>%
-    column_to_rownames( var = "LabID")
-
+    mutate(row = row_number())%>%
+    pivot_wider( names_from = c("EnsemblID", "row"), values_from = Value)%>%
+    setNames(sub("_[^_]+$", "",names(.))) %>%
+    column_to_rownames(var = "LabID")
+    
 
 dim(expression.data)
 
@@ -118,7 +118,6 @@ Some common steps for data cleaning include checking for duplicated names, conve
 ## genes <- expression.data$HGNC_ID
 ## expression.data$Ensembl_ID <- NULL
 ## expression.data$HGNC_ID <- NULL
-
 ## # Transform into matrix of samples (cell lines) by features
 ## expression.data <- t(expression.data)
 ## colnames(expression.data) <- genes
@@ -127,8 +126,11 @@ Some common steps for data cleaning include checking for duplicated names, conve
 sum(is.na(expression.data))
 
 ##  Convert expression data to log2 scale
-expression.data <- log2(expression.data + 1)
-## tried tidyverse, but was taking much longer
+expression.data <- expression.data %>%
+    mutate(across(where(is.numeric), ~ .x + 1)) %>%
+    log2()
+
+
 
 # Remove duplicate gene names
 ##expression.data <- expression.data %>% 
@@ -144,43 +146,23 @@ expression.data <- log2(expression.data + 1)
 Selecting relevant and predictive features, or filtering out uninformative features, can often improve the speed and accuracy of a model. For now, we will demonstrate a simple filtering step.
 
 ```{r}
-
-
-# Keep 5,000 genes with highest variance
-top.by.var <- expression.data[,order(apply(expression.data, 2, var), decreasing = T)][,1:500]
-# Alternatively, keep 5,000 genes with highest coefficient of variation
+## function to find coefficient of variation
 CV <- function(vec){
   return(sd(vec)/mean(vec))
 }
+
+## function for ranking genes by variance or cv
+## inputs: data       data.frame      expression data with genes in rows and samples in columns
+##         statistic  string          "variance" or "cv"
+rankGenes <- function(data, statistic = "variance") {
+    ranks <- data %>%
+        filter(rownames(data) %in% c("A1BG_1", "A1BG-AS1_2")) %>%
+        summarise(m = rowSums(.))
+        
+
+
 top.by.cv <- expression.data[,order(apply(expression.data, 2, CV), decreasing = T)][,1:500]
-### TODO: Summarize and compare top gene lists from by var and c.v. methods above ###
-
-## # Keep 5,000 genes with highest variance
-## top.by.var <- expression.data %>% 
-##   select_if(is.numeric) %>% 
-##   summarize_all(var) %>% 
-##   unlist() %>% 
-##   sort(decreasing = TRUE) %>% 
-##   names() %>% 
-##   head(5000) %>% 
-##   select(expression.data, .)
-
-## # Alternatively, keep 5,000 genes with highest coefficient of variation
-## CV <- function(vec){
-##   return(sd(vec)/mean(vec))
-## }
-## top.by.cv <- expression.data %>% 
-##   select_if(is.numeric) %>% 
-##   summarize_all(CV) %>% 
-##   unlist() %>% 
-##   sort(decreasing = TRUE) %>% 
-##   names() %>% 
-##   head(5000) %>% 
-##   select(expression.data, .)
-
-### added tghe tidyverse format, but it's super slow. why??
-
-
+## Keep 5,000 genes with highest variance
 
 ### TODO: Summarize and compare top gene lists from by var and c.v. methods above ###
 var.rank <- as.data.frame(cbind(gene = colnames(top.by.var),var_rank = 1:500))
@@ -206,7 +188,7 @@ $MSE = \frac{1}{n}\sum^{n}_{i=1}(\hat{Y}_i - Y_i)^2$
 ```{r, message = F, warning = F}
 
 #source("http://bioconductor.org/biocLite.R")
-BiocManager::install("impute")
+#BiocManager::install("impute")
 
 library(impute)
 
@@ -301,28 +283,24 @@ We have two necessary parts now: a cleaned data set of observed data ($X$) and a
 library(caret)
 
 # Keep the cell lines that have values both for gene expression and response
-drug7.response <- na.omit(drug7.response)
-cell.lines <- intersect(row.names(expression.data), 
-                        names(drug7.response))
 
-# Subset and order the data by the cell lines we have
-# (Using the 5,000 genes we selected earlier for a smaller data set)
-expression.data <- top.by.var[cell.lines,]
-drug7.response <- drug7.response[cell.lines]
+cell.lines <- merge(top.by.var, meta[, c("LabID", "BMI")], by.x = 0, by.y = "LabID")
+cell.lines <- cell.lines[!is.na(cell.lines$BMI),]
+rownames(cell.lines) <- cell.lines$Row.names
+cell.lines <- cell.lines[,-1]
 
-# Concatenate expression data and response vector for later
-combined.data <- cbind(expression.data, Response = drug7.response)
 
+combined.data <- cell.lines
 # Split cell lines into training and test set
 percent.training = .75
-n = length(cell.lines)
+n = nrow(cell.lines)
 
 inTrain <- sample(n, n * percent.training)
 training <- combined.data[inTrain,]
 testing  <- combined.data[-inTrain,]
 
 # Train a linear model
-lm.fit <- train(Response ~ ., 
+lm.fit <- train(BMI ~ ., 
                 data = training,
                 method = 'lm')
 lm.fit
@@ -347,8 +325,9 @@ library(ROCR)
 # Summarize the drug response values
 summary(drug7.response)
 
-# Define sensitive cell lines and convert response to binary
-sensitive.cell.lines = cell.lines[drug7.response < 4.7]
+                                        # Define sensitive cell lines and convert response to binary
+## Change to obesity
+sensitive.cell.lines = rownames(cell.lines[cell.lines$BMI > 30,])
 response = factor(row.names(expression.data) %in% sensitive.cell.lines)
 table(response)
 
