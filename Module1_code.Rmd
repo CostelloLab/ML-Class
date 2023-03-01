@@ -252,17 +252,17 @@ for (percent in seq(.01, .50, by = .05)){
 
     imputed.min <- mapply(function(row, col) 
                            return(min(expression.temp[row,], na.rm = T)), 
-                        row = pairs_to_delete$row , col = pairs_to_delete$col)
+                        row = rows_to_delete , col = cols_to_delete)
     imputed.median <- mapply(function(row, col) 
                            return(median(expression.temp[row,], na.rm = T)), 
-                        row = pairs_to_delete$row , col = pairs_to_delete$col)
+                        row = rows_to_delete , col = cols_to_delete)
     
   
   
   # Evaluate performance with MSE
   mse <- MSE(imputed.values, values_to_delete)
-    min.mse <- MSE(imputed.min, deleted.values)
-    median.mse <- MSE(imputed.median, deleted.values)
+    min.mse <- MSE(imputed.min, values_to_delete)
+    median.mse <- MSE(imputed.median,values_to_delete )
     
   thresholds = c(thresholds, percent)
     knn.errors = c(knn.errors, mse)
