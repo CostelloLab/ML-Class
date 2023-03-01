@@ -176,8 +176,8 @@ ranks <- var.rank %>%
     full_join(cv.rank, by = "gene")
 
 
-ggplot(ranks, aes(x = var_rank, y = cv_rank)) +
-      geom_point()
+## ggplot(ranks, aes(x = var_rank, y = cv_rank)) +
+##       geom_point()
 
 ```
 
@@ -198,7 +198,7 @@ $MSE = \frac{1}{n}\sum^{n}_{i=1}(\hat{Y}_i - Y_i)^2$
 library(impute)
 
 MSE <- function(yhat, y){
-    squared.error <- sum(mapply(function(yhat,y) (yhat-y)^2, yhat, y))
+    squared.error <- sum(mapply(function(yhat,y) (yhat-y)^2, yhat, y), na.rm = T)
     return(squared.error/length(yhat))
   }
 
@@ -208,40 +208,59 @@ knn.errors = c()
 min.errors = c()
 median.errors = c()
 
+# restrict to the 5,000 genes with top CV. 
+expression.data.var <- expression.data[var.ranks[1:5000]]
+
 for (percent in seq(.01, .50, by = .05)){
 
-  expression.temp <- expression.data
+    expression.temp <- t(expression.data.var) # transpose for knn functions
 
-  # Calculate the percentage of the data to delete
-  obs.total <- length(expression.temp)
-  col.sample <- sample(1:ncol(expression.temp), round(ncol(expression.temp)* percent), replace = FALSE) 
-  row.sample <- sample(1:nrow(expression.temp), round(nrow(expression.temp)* percent), replace = FALSE)   
-  # Store the deleted values before converting them to NAs
-    deleted.values = mapply(function(row, col) 
-                           return(expression.temp[row,col]), 
-                    row = row.sample, col = col.sample)
+    ## Delete data based on percentag
+    n_cols <-  ncol(expression.temp)
+    n_rows <- nrow(expression.temp)
+
+    total_pairs <- n_cols * n_rows
+    n_pairs_to_delete <- floor(percent * total_pairs)
+
+    rows_to_delete <- sample(1:n_rows, n_pairs_to_delete, replace = T)
+    cols_to_delete <- sample(1:n_cols, n_pairs_to_delete, replace = T)
+
+    values_to_delete <- numeric()
+    pairs_to_delete <- character()
+    
+    for(i in 1:n_pairs_to_delete) {
+        pair <- paste(rows_to_delete[i], cols_to_delete[i])
+        if(!(pair %in% pairs_to_delete)) {
+            values_to_delete[i] <- expression.temp[rows_to_delete[i], cols_to_delete[i]]
+            expression.temp[rows_to_delete[i], cols_to_delete[i]] <- NA
+        }
+        pairs_to_delete <- c(pair, pairs_to_delete)
+    }
+    
+      
+  # Impute missing data with knn algorithm
+  imputed.data <- impute.knn(expression.temp, k =10, maxp = n_rows, rng.seed = 1234)
+  imputed.values <- numeric()
+
+    for(i in 1:n_pairs_to_delete) {
+        imputed.values[i] <- imputed.data$data[rows_to_delete[i], cols_to_delete[i]]
+    }
 
     
-  
-  expression.temp[row.sample, col.sample] <- NA
-  # Impute missing data with knn algorithm
-  imputed.data <- impute.knn(as.matrix(expression.temp), k = round(nrow(expression.data)/10))
-  imputed.values <- imputed.data$data[row.sample,col.sample]
-  
 ### TODO: Impute missing data with 2 other algorithms ###
     
 
-  imputed.min <- mapply(function(row, col) 
-                           return(min(expression.temp[,col], na.rm = T)), 
-                        row = row.sample, col = col.sample)
+    imputed.min <- mapply(function(row, col) 
+                           return(min(expression.temp[row,], na.rm = T)), 
+                        row = pairs_to_delete$row , col = pairs_to_delete$col)
     imputed.median <- mapply(function(row, col) 
-                           return(median(expression.temp[,col], na.rm = T)), 
-                        row = row.sample, col = col.sample)
+                           return(median(expression.temp[row,], na.rm = T)), 
+                        row = pairs_to_delete$row , col = pairs_to_delete$col)
     
   
   
   # Evaluate performance with MSE
-  mse <- MSE(imputed.values, deleted.values)
+  mse <- MSE(imputed.values, values_to_delete)
     min.mse <- MSE(imputed.min, deleted.values)
     median.mse <- MSE(imputed.median, deleted.values)
     
