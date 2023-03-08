@@ -1,0 +1,715 @@
+---
+title: "CPBS 7630 Module 2 - Feature Selection"
+date: "February 13, 2018"
+output: html_document
+---
+
+---
+
+#### Contents:
+
+* [Getting and cleaning data](#synapse)
+* [Feature selection - filtering methods](#feature_selection1)
+* [Feature selection - wrapper methods](#feature_selection2)
+* [Evaluation](#evaluation)
+* [Principal components analysis](#pca)
+* [Evaluation](#evaluationpca)
+* [Assignment](#homework)
+
+---
+
+<a name="synapse"/>
+
+### Getting and cleaning data
+
+Get the drug sensitivity data from [Costello, et al. A Community Effort to Assess and Improve Drug Sensitivity Prediction Algorithms (2014)](http://www.nature.com/nbt/journal/v32/n12/full/nbt.2877.html). 
+
+```{r, message = F}
+
+library(synapseClient)
+synapseLogin(username = 'username', password = 'password')
+
+# --------------------------- EXPRESSION DATA ---------------------------------
+
+# Get gene expression data from the DREAM7 challenge 
+# (36,953 genes, 46 cell lines)
+DREAM7.expression.data <- synGet('syn2785861')
+local.file.path <- DREAM7.expression.data@filePath
+expression.data <- read.delim(local.file.path, 
+                              header = T, 
+                              stringsAsFactors = F,
+                              check.names = F)
+
+# Store gene names for later, remove non-numeric data
+genes <- expression.data$HGNC_ID
+expression.data$Ensembl_ID <- NULL
+expression.data$HGNC_ID <- NULL
+
+# Transform into matrix of samples (cell lines) by features
+expression.data <- t(expression.data)
+colnames(expression.data) <- genes
+
+# Log transform. Keep in mind that this is necessary only if you have RNAseq data that is in the form of linear scale transcript counts. 
+expression.data <- log2(expression.data+1)
+
+# Get rid of a duplicated gene name
+expression.data <- expression.data[, !duplicated(colnames(expression.data))]
+
+# ----------------------------- RESPONSE DATA ---------------------------------
+
+# Get the drug response data from Synpase, training and test sets
+DREAM7.train <- synGet('syn2785850')
+train.data <- read.table(getFileLocation(DREAM7.train), 
+                         header = T, 
+                         sep='\t', 
+                         row.names = 1,
+                         stringsAsFactors = F)
+
+DREAM7.test <- synGet('syn2785837')
+test.data <- read.table(getFileLocation(DREAM7.test),
+                        header = T,
+                        sep='\t', 
+                        row.names = 1, 
+                        stringsAsFactors = F)
+
+# Concatenate the drug response data for train and test set (53 cell lines, 31 drugs)
+response.data <- rbind(test.data,train.data)
+
+# Pull out data on one drug (Drug 7) to use for regression/classification exercises
+drug7.response <- response.data$Drug7
+names(drug7.response) <- row.names(response.data)
+drug7.response <- na.omit(drug7.response)
+
+# Keep data for the 39 cell lines with both expression and Drug7 response data
+celllines.in.both <- intersect(names(drug7.response), row.names(expression.data))
+drug7.response <- drug7.response[names(drug7.response) %in% celllines.in.both]
+expression.data <- expression.data[row.names(expression.data) %in% celllines.in.both,]
+
+# make sure the response and expression data match
+length(drug7.response)
+dim(expression.data)
+names(drug7.response)
+row.names(expression.data)
+
+
+```
+
+<a name="feature_selection1"/>
+
+### Feature selection - filtering methods
+
+Filtering out uninformative features, can often improve the speed and accuracy of a model. For a review of the different kind of feature selection methods, see [Saeyes et al.](http://bioinformatics.oxfordjournals.org/content/23/19/2507.full.pdf+html) and [Bolon-Canedo et al.](http://www.sciencedirect.com/science/article/pii/S0020025514006021) In this section, we will briefly explore two univariate **filter methods** for feature selection, which are independent of the classifier. 
+
+#### Example 1 - filtering by average expression
+
+We can begin by filtering out genes that are not expressed in our cell lines. How could we determine an optimal cutoff for defining "not expressed?"
+
+```{r}
+
+# Summarize average gene expression values - lots of genes with 0 expression
+avg.exps <- colMeans(expression.data)
+summary(avg.exps)
+
+# We can filter out genes that are lowly experssed, that is, these genes are in the noise.
+cutoff <- 5
+plot(avg.exps, 
+     main = ' DREAM7 gene expression values', 
+     xlab = 'Gene', ylab = 'Gene expression value',
+     col = ifelse(avg.exps < cutoff, 'red', 'black'))
+expression.data <- expression.data[, avg.exps > cutoff]
+dim(expression.data)
+# 8365 genes have average expression value above the cutoff
+
+
+# Another option is to filter our any genes that have a lot of the same values suggesting there  is very little variance in the data
+uniqueFrac <- array()
+for(i in 1:dim(expression.data)[2]) {
+  uniqueFrac[i] <- length(table(expression.data[,i]))/dim(expression.data)[1]
+}
+expression.data <- expression.data[,uniqueFrac > .5]
+dim(expression.data)
+# in this instance, it looks like all of the flat profiles have been filtered out with the lowly expressed filter
+
+```
+
+#### Example 2 - filtering by variance
+
+The most informative genes might be the ones with the most variability in their expression, so we can filter out genes with a low coefficient of variation.
+
+```{r}
+
+# Keep 500 genes with highest coefficient of variation
+CV <- function(vec){
+  return(sd(vec)/mean(vec))
+}
+
+# Order the 8365 genes by their c.v. (highest to lowest) and keep top 500
+all.genes = colnames(expression.data)
+top.cv.genes <- all.genes[order(apply(expression.data, 2, CV), decreasing = T)][1:500]
+expression.data <- expression.data[, top.cv.genes]
+dim(expression.data)
+
+```
+
+Our final feature matrix consists of 39 cell lines and 500 genes, which is a very manageable size.
+
+#### Example 3 - filtering by Information Gain
+
+The first two examples filtered genes based on characteristics of the genes themselves, filtering on Information Gain takes the response values into account, that is, we can now look at how well the genes relate to drug response.
+
+```{r}
+
+# building from the expression.data that has already been filtered for average expression and CV, rank and select the top genes according to information gain.
+
+# I ran into a lot of issues with rJava, so this might be a place where you need to do a bit of extra work.
+# rJava works with java version 8. Make sure you have it installed, then check to see if your system is using 
+# java 8 vs. java 6.  At the command line run: 
+# > java -version
+# you will either see: 
+# java version "1.6.xxx" 
+# or 
+# java version "1.8.xxx"
+# If you see version 1.6.xxx, then you need to direct your system to use version 1.8.xxx according to:
+# https://gist.github.com/johan/10590467   (it says java 1.7.xxx, but it still works)
+# if you run into permission issues even with sudo, then see:
+# https://stackoverflow.com/questions/33007889/move-usr-bin-java-in-terminal
+# after you turn off rootless protection, then retry the steps in teh first link.
+#
+# install.packages("rJava")
+# install.packages("FSelector")
+# if you are still having an issue with loading FSelector, run the following at your OS terminal command line "sudo ln -f -s $(/usr/libexec/java_home)/jre/lib/server/libjvm.dylib /usr/local/lib"
+library(FSelector)
+
+# Information Gain must be calculated over discritized data
+
+expression.discrete <- matrix(0, nrow=dim(expression.data)[1], ncol=dim(expression.data)[2])
+colnames(expression.discrete) <- colnames(expression.data)
+row.names(expression.discrete) <- row.names(expression.data)
+for(i in 1:dim(expression.data)[2]) {
+  s <- summary(expression.data[,i])
+  expression.discrete[,i] <- .bincode(expression.data[,i], c(-Inf,s[2],s[3], s[5], Inf))
+}
+
+drug7.binary <- drug7.response > median(drug7.response)
+drug7.binary[drug7.binary==F] <- "resistant"
+drug7.binary[drug7.binary==T] <- "sensitive"
+combined.data <- data.frame(cbind(expression.discrete, Response = drug7.binary))
+genes.ig <- information.gain(Response~., combined.data)
+expression.data.ig <- expression.data[,order(genes.ig, decreasing=T)]
+
+```
+
+
+<a name="feature_selection2"/>
+
+### Feature selection - wrapper methods
+
+Unlike filtering methods, wrapper methods for feature selection interact with the classifier. Again, refer to [Saeyes et al.](http://bioinformatics.oxfordjournals.org/content/23/19/2507.full.pdf+html) and [Bolon-Canedo et al.](http://www.sciencedirect.com/science/article/pii/S0020025514006021) for more information. For the example, we will see a wrapper-based method as implemented in the `FSelector` R package. More information on the algorithms in `FSelector` can be found [here](https://en.wikibooks.org/wiki/Data_Mining_Algorithms_In_R/Dimensionality_Reduction/Feature_Selection) or in the package [vignette](https://cran.r-project.org/web/packages/FSelector/FSelector.pdf).
+
+#### Example 1 - forward selection
+
+```{r, eval = F, message=F}
+
+# Use 10 random features to demonstrate forward search feature selection
+set.seed(777)
+expression.data.10 <- expression.data[, top.cv.genes[runif(10, 1, 500)]]
+
+# Combine expression data and response vector
+combined.data <- data.frame(cbind(expression.data.10, Response = drug7.response))
+dim(expression.data.10)
+
+# Mean squared error
+RMSE <- function(yhat, y){
+    squared.error <- sum(mapply(function(yhat,y) (yhat-y)^2, yhat, y))
+    return(sqrt(squared.error/length(yhat)))
+  }
+
+evaluator <- function(subset.to.evaluate) {
+  #k-fold cross validation
+  k <- 5
+  splits <- runif(nrow(combined.data))
+  results = sapply(1:k, function(i) {
+    test.idx <- (splits >= (i - 1) / k) & (splits < i / k)
+    train.idx <- !test.idx
+    test <- combined.data[test.idx,]
+    train <- combined.data[train.idx,]
+    lm.fit <- lm(Response ~ ., train)
+    error = RMSE(predict(lm.fit, test, type="response"), test$Response)
+    return(-1*error)
+  })
+  print(subset.to.evaluate)
+  print(mean(results))
+  return(mean(results))
+}
+
+subset.to.use <- forward.search(colnames(combined.data)[-11], evaluator)
+f <- as.simple.formula(subset.to.use, "Response")
+print(f)
+
+# the example below is from the FSelector examples and migth be a  bit more clear.
+#library(rpart)
+#  data(iris)
+#  evaluator <- function(subset) {
+#    #k-fold cross validation
+#    k <- 5
+#    splits <- runif(nrow(iris))
+#    results = sapply(1:k, function(i) {
+#      test.idx <- (splits >= (i - 1) / k) & (splits < i / k)
+#      train.idx <- !test.idx
+#      test <- iris[test.idx, , drop=FALSE]
+#      train <- iris[train.idx, , drop=FALSE]
+#      tree <- rpart(as.simple.formula(subset, "Species"), train)
+#      error.rate = sum(test$Species != predict(tree, test, type="c")) / nrow(test)
+#      return(1 - error.rate)
+#    })
+#    print(subset)
+#    print(mean(results))
+#    return(mean(results))
+#  }
+#  subset <- forward.search(names(iris)[-5], evaluator)
+#  f <- as.simple.formula(subset, "Species")
+#  print(f)
+
+```
+
+#### Example 2 - recursive feature elimination (backward selection)
+
+In the `caret` package, the `rfe()` function performs recursive feature elimination (RFE). The algorithm can be found [here](http://topepo.github.io/caret/rfe.html). 
+
+```{r, message = F}
+library(caret)
+library(randomForest)
+
+# Use 10 random features to demonstrate RFE
+set.seed(888)
+x <- expression.data[, top.cv.genes[runif(10, 1, ncol(expression.data))]]
+y <- drug7.response
+
+# Standard caret preprocessing and scaling
+norm.x <- preProcess(x)
+x <- predict(norm.x, x)
+x <- as.data.frame(x)
+
+# Fit models with varying feature subset sizes
+subsets <- c(1:5, 10, 15, 20)
+
+# Create control object with cross-validation
+ctrl <- rfeControl(functions = lmFuncs,
+                   method = "repeatedcv",
+                   repeats = 5,
+                   verbose = FALSE)
+
+# Fit linear model
+lmProfile <- rfe(x, y,
+                 sizes = subsets,
+                 rfeControl = ctrl)
+
+# View info, including top predictors
+lmProfile
+
+# Get string of variable names that were picked in the final model
+predictors(lmProfile)
+
+# View coefficients
+lmProfile$fit
+
+# Plot
+plot(lmProfile, type = c("g", "o"))
+
+```
+
+<a name="pca"/>
+
+### Principal components analysis
+
+Principal components analysis (PCA) is used for performing dimensionality reduction (feature extraction) to find novel, meaningful patterns in a data set.
+
+#### Example 1 - toy data
+
+To illustrate the basic principles of PCA, we will first look at a toy data set and an example adapted from [here](https://tgmstat.wordpress.com/2013/11/28/computing-and-visualizing-pca-in-r/#ref1). The `iris` data set contains data on 3 species of iris and measurements for their sepal length, sepal width, petal length and petal width.
+
+```{r, message = F, warning = F}
+
+# Toy data set
+data(iris)
+
+# Log transform 
+iris.log <- log(iris[, 1:4])
+iris.species <- iris[, 5]
+ 
+# Apply PCA with stats::prcomp
+iris.pca <- prcomp(iris.log,
+                 center = TRUE,
+                 scale. = TRUE)
+# View the principal components rotation (also called loadings)
+iris.pca
+
+# Get ggbiplot from Github if needed
+# install.packages("devtools")
+# library(devtools)
+# install_github("vqv/ggbiplot")
+
+# Plot principal component variance
+plot(iris.pca, type = "l", col = 'skyblue', pch = 19, 
+     main = 'PC variance for iris data')
+
+# Plot PCA with ggbiplot 
+library(ggbiplot)
+g <- ggbiplot(iris.pca, obs.scale = 1, var.scale = 1, 
+              groups = iris.species, ellipse = TRUE, 
+              circle = TRUE)
+g <- g + scale_color_discrete(name = '')
+g <- g + theme(legend.direction = 'horizontal', 
+               legend.position = 'top')
+print(g)
+
+# Summarize each of the principal components
+summary(iris.pca)
+
+```
+
+#### Example 2 - PCA for drug synergy
+
+In this example, we'll use the DREAM7 drug synergy data we prepared in the first code chunk.
+
+```{r, message = F, warning = F}
+
+# Apply PCA with stats::prcomp
+expression.pca <- prcomp(expression.data,
+                 center = TRUE,
+                 scale. = TRUE)
+
+# View the number of principal components
+length(expression.pca$sdev)
+
+# Plot principal component variance
+plot(expression.pca, type = "l", col = 'skyblue', pch = 19, 
+     main = 'PC variance for iris data')
+
+# Get ggbiplot from Github if needed
+# install.packages("devtools")
+# library(devtools)
+# install_github("vqv/ggbiplot")
+
+# Categorize drug response for coloring the plot
+# Less than median GI50 = sensitive; greater than median = resistant
+response.groups <- factor(drug7.response >= median(drug7.response), labels = c('sensitive', 'resistant'))
+
+# Plot PCA with ggbiplot 
+library(ggbiplot)
+g <- ggbiplot(expression.pca, obs.scale = 1, var.scale = 1, 
+              groups = response.groups, ellipse = TRUE, 
+              var.axes = F, circle = TRUE)
+g <- g + scale_color_discrete(name = '')
+g <- g + theme(legend.direction = 'horizontal', 
+               legend.position = 'top')
+print(g)
+
+# We could also try separating the groups more based on response distribution
+hist(drug7.response, xlab = 'GI50')
+
+response.groups <- factor(cut(drug7.response, 
+                       breaks = c(0, 4.2, 6.7, 7.1),
+                       labels = c('sensitive', 'average', 'resistant')))
+
+g <- ggbiplot(expression.pca, obs.scale = 1, var.scale = 1, 
+              groups = response.groups, ellipse = TRUE, 
+              var.axes = F, circle = TRUE)
+g <- g + scale_color_discrete(name = '')
+g <- g + theme(legend.direction = 'horizontal', 
+               legend.position = 'top')
+print(g)
+
+# Summarize each of the 39 principal components
+summary(expression.pca)
+
+```
+  
+<a name="evaluationpca"/>
+
+### Comparison with/without PCA
+
+```{r warning = F}
+
+
+# Make train and test sets
+cell.lines <- names(drug7.response)
+train = cell.lines %in% sample(cell.lines, 20)
+test = !train
+
+# Feature matrix made from 29 random genes
+old.feature.matrix <- expression.data[,sample(10)]
+old.combined <- data.frame(cbind(old.feature.matrix, Response = drug7.response))
+old.lm <- lm(Response ~ ., old.combined[train,])
+RMSE(predict(old.lm, old.combined[test,], type="response"), old.combined[test, 'Response'])
+
+# New feature matrix made from 29 PCs
+new.feature.matrix <- data.frame(expression.pca$x[,1:10])
+new.combined <- data.frame(cbind(new.feature.matrix, Response = drug7.response))
+new.lm <- lm(Response ~ ., new.combined[train,])
+RMSE(predict(new.lm, new.combined[test,], type="response"), new.combined[test, 'Response'])
+
+```
+
+  
+<a name="homework"/>
+
+### Homework Assignment for Module 2
+```{r tidy = T}
+
+# Assignment 2
+# Apply PCA to your new data set for the presentation on Thursday. How many principal components are required to explain 90% of the variance? Evaluate the effect of performing PCA on your results. Can you relate/correlate any of the principal components with the underlying biology (or other applicable data type)?
+
+sessionInfo()
+
+```
+
+```{r}
+library(tidyverse).  # data formatting
+library(limma)       # density plots
+
+
+# Load LCM gene expression data into a tibble
+lcm.expression.data <- readr::read_tsv(file = "data/LCM.expression.data.tsv",
+                            col_names = T) %>% as.data.frame()
+row.names(lcm.expression.data) <- lcm.expression.data[,1]
+
+lcm.expression.data  <- lcm.expression.data[,-1]
+
+## reformat lcm.expression.data
+lcm.expression.data.t <- t(lcm.expression.data) %>% as.data.frame()
+
+# log transform
+lcm.expr.log <- log2(lcm.expression.data.t)
+plotDensities(lcm.expr.log)
+
+```
+
+Filter data based on variance
+```{r}
+# Keep 500 genes with highest variance
+lcm.top.var <- lcm.expr.log[,order(apply(lcm.expr.log, 2, var), decreasing = T)][,1:500]
+
+# # select only the columns containing gene expression data
+# gene_expr_data <- tcga.expression.data %>% select(-ID)
+# 
+# # calculate the variance of each gene using the `summarise_all` function
+# gene_variances <- lcm.expr.log %>% summarise_all(var)
+# 
+# # sort the genes by variance in descending order and select the top 5000
+# top_var_genes <- gene_variances %>% 
+#   tidyr::pivot_longer(tidyr::everything(), names_to = "gene", values_to = "variance") %>% # convert data to long format
+#   dplyr::arrange(dplyr::desc(variance)) %>% # sort by variance in descending order
+#   head(5000) %>% # select the top 5000 genes with highest variance
+#   dplyr::pull(gene) # extract the gene names as a vector
+# # the `top_var_genes` vector now contains the names of the 5000 genes with highest variance
+# 
+# # create a new tibble with only the top 5000 genes and their expression data
+# top.by.var <- tcga.expression.data %>% dplyr::select(1, all_of(top_var_genes))
+```
+
+Append relevant annotations and metadata to filtered gene expression data
+```{r}
+library(readxl)   # load metadata excel file
+
+# load metadata
+lcm.meta.data <- read_xlsx(path = "data/LCM.metadata.4GEO.xlsx", 
+                           range = "A8:L196", 
+                           col_names = T) %>% as.data.frame()
+
+## assign rownames, remove sample name column
+rownames(lcm.meta.data) <- lcm.meta.data$`Sample name`
+lcm.meta.data <- lcm.meta.data[,-1]
+
+# # append a "group" identifier column to each tissue type 
+# lcm.top.var.ann <- lcm.top.var %>% dplyr::mutate(
+#   ROI = case_when(
+#   grepl("*_sT.*", row.names(lcm.top.var)) ~ "Stroma_adjTumor",
+#   grepl("*_sP.*", row.names(lcm.top.var)) ~ "Stroma_adjPIN",
+#   grepl("*_sp.*", row.names(lcm.top.var)) ~ "Stroma_adjPIN",
+#   grepl("*_sB.*", row.names(lcm.top.var)) ~ "Stroma_adjBenignEpi",
+#   grepl("*_T.*", row.names(lcm.top.var)) ~ "Tumor",
+#   grepl("*_P.*", row.names(lcm.top.var)) ~ "PIN",
+#   grepl("*_B.*", row.names(lcm.top.var)) ~ "Benign_epithelium",
+#   grepl("*_AM.*", row.names(lcm.top.var)) ~ "Admixed"
+# ))
+# 
+# ## check new column
+# print(lcm.top.var.ann$ROI)
+
+# create new df with relevant metadata columns
+mymeta <- lcm.meta.data %>% select(c("source name", "characteristics: case", "charactersitics: Gleason", "charactersitics: ROI"))
+
+# simplify colnames
+mymeta <- mymeta %>% rename("Case" = "characteristics: case", "Gleason" = "charactersitics: Gleason", "Biopsy_source" = "source name", "ROI" = "charactersitics: ROI") %>% as.data.frame()
+
+# make sure rownames of both dfs match before merging
+intersect(row.names(lcm.top.var), row.names(mymeta))
+
+# merge metadata with filtered gene expression data and fix rownames
+lcm.top.var.ann <- merge(lcm.top.var, mymeta, by = 0)
+row.names(lcm.top.var.ann) <- lcm.top.var.ann$Row.names
+lcm.top.var.ann <- lcm.top.var.ann[,-1]
+
+# remove rows with "control" in the ROI column
+dim_desc(lcm.top.var.ann)
+lcm.top.var.ann <- lcm.top.var.ann %>% filter(ROI != "control")
+dim_desc(lcm.top.var.ann)
+
+# modify ROI col values to make them more intuitive
+lcm.top.var.ann <- lcm.top.var.ann %>% dplyr::mutate(
+  ROI = case_when(
+  grepl("sT", lcm.top.var.ann$ROI) ~ "Stroma_adjTumor",
+  grepl("sP", lcm.top.var.ann$ROI) ~ "Stroma_adjPIN",
+  grepl("sB", lcm.top.var.ann$ROI) ~ "Stroma_adjBenignEpi",
+  grepl("T", lcm.top.var.ann$ROI) ~ "Tumor",
+  grepl("P", lcm.top.var.ann$ROI) ~ "PIN",
+  grepl("B", lcm.top.var.ann$ROI) ~ "Benign_epithelium",
+  grepl("AM", lcm.top.var.ann$ROI) ~ "Admixed"
+))
+
+```
+
+
+Principle components analysis
+```{r}
+library(FactoMineR)   # PCA
+library(ggplot2)
+
+# principle components analysis
+mypca <- FactoMineR::PCA(lcm.top.var.ann, ncp = 500, quali.sup = c("ROI", "Case", "Gleason", "Biopsy_source"), graph = F)
+
+# how many components needed to account for 90% of the variance between tissue types (ROIs)?
+mypca$eig     # looks like 46 components
+
+# extract PCs for plotting
+pc1 <- mypca$ind$coord[,1]
+pc2 <- mypca$ind$coord[,2]
+
+# merge into 1 dataframe
+pcs <- data.frame(pc1,pc2)
+
+# spot check to make sure pc1 and pc2 merged correctly
+pc1['10_21_4645_C3_sP.CEL']
+pc2['10_21_4645_C3_sP.CEL']
+pcs['10_21_4645_C3_sP.CEL',]
+
+# PCA plots!
+pca.roi <- ggplot(pcs, aes(x = pc1, y = pc2, color = lcm.top.var.ann$ROI)) +
+  geom_point() +
+  theme_minimal()
+pca.roi
+
+pca.gleason <- ggplot(pcs, aes(x = pc1, y = pc2, color = lcm.top.var.ann$Gleason)) +
+  geom_point() +
+  theme_minimal()
+p.gleason
+
+pca.case <- ggplot(pcs, aes(x = pc1, y = pc2, color = lcm.top.var.ann$Case)) +
+  geom_point() +
+  theme_minimal()
+pca.case
+
+pca.biopsy <- ggplot(pcs, aes(x = pc1, y = pc2, color = lcm.top.var.ann$Biopsy_source)) +
+  geom_point() +
+  theme_minimal()
+pca.biopsy
+```
+
+Now to visualize with a t-SNE.
+```{r}
+library(ggplot2)
+library(tsne)
+
+features <- lcm.top.var.ann %>% dplyr::select(-"Case", -"Biopsy_source", -"Gleason", -"ROI")
+anns <- lcm.top.var.ann %>% dplyr::select("Case", "Biopsy_source", "Gleason", "ROI")
+
+set.seed(0)
+tsne <- tsne::tsne(features, initial_dims = 2, k = 2) %>% as.data.frame()
+# how to make sure order hasn't changed???
+tsne.ann <- cbind(tsne,anns)
+
+# t-SNE plots!
+tsne.roi <- ggplot(tsne.ann, aes(x = V1, y = V2, color = tsne.ann$ROI)) +
+  geom_point()
+tsne.roi
+
+tsne.gleason <- ggplot(tsne.ann, aes(x = V1, y = V2, color = tsne.ann$Gleason)) +
+  geom_point()
+tsne.gleason
+
+tsne.case <- ggplot(tsne.ann, aes(x = V1, y = V2, color = tsne.ann$Case)) +
+  geom_point()
+tsne.case
+
+tsne.biopsy <- ggplot(tsne.ann, aes(x = V1, y = V2, color = tsne.ann$Biopsy_source)) +
+  geom_point()
+tsne.biopsy
+
+```
+
+And finally, with UMAPs.
+Now to visualize with a t-SNE.
+```{r}
+library(ggplot2)
+library(umap)
+
+features <- lcm.top.var.ann %>% dplyr::select(-"Case", -"Biopsy_source", -"Gleason", -"ROI")
+anns <- lcm.top.var.ann %>% dplyr::select("Case", "Biopsy_source", "Gleason", "ROI")
+
+set.seed(0)
+umap <- umap(features, n_components = 2, random_state = 15)
+layout <- umap[["layout"]] %>% as.data.frame()
+# how to make sure order hasn't changed???
+umap.ann <- cbind(layout,anns)
+
+# UMAPs!
+umap.roi <- ggplot(umap.ann, aes(x = V1, y = V2, color = umap.ann$ROI)) +
+  geom_point()
+umap.roi
+
+umap.gleason <- ggplot(umap.ann, aes(x = V1, y = V2, color = umap.ann$Gleason)) +
+  geom_point()
+umap.gleason
+
+umap.case <- ggplot(umap.ann, aes(x = V1, y = V2, color = umap.ann$Case)) +
+  geom_point()
+umap.case
+
+umap.biopsy <- ggplot(umap.ann, aes(x = V1, y = V2, color = umap.ann$Biopsy_source)) +
+  geom_point()
+umap.biopsy
+
+```
+Now going to mess around with some UMAP params and see how they change
+```{r}
+library(umap)
+
+features <- lcm.top.var.ann %>% dplyr::select(-"Case", -"Biopsy_source", -"Gleason", -"ROI")
+anns <- lcm.top.var.ann %>% dplyr::select("Case", "Biopsy_source", "Gleason", "ROI")
+
+set.seed(0)
+umap <- umap(features)
+layout <- umap[["layout"]] %>% as.data.frame()
+# how to make sure order hasn't changed???
+umap.ann <- cbind(layout,anns)
+
+# UMAPs!
+umap.roi <- ggplot(umap.ann, aes(x = V1, y = V2, color = umap.ann$ROI)) +
+  geom_point()
+umap.roi
+
+umap.gleason <- ggplot(umap.ann, aes(x = V1, y = V2, color = umap.ann$Gleason)) +
+  geom_point()
+umap.gleason
+
+umap.case <- ggplot(umap.ann, aes(x = V1, y = V2, color = umap.ann$Case)) +
+  geom_point()
+umap.case
+
+umap.biopsy <- ggplot(umap.ann, aes(x = V1, y = V2, color = umap.ann$Biopsy_source)) +
+  geom_point()
+umap.biopsy
+
+
+```
