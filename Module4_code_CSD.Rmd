@@ -1,0 +1,637 @@
+---
+title: "CPBS 7630 Module 4 - SVM Classification"
+date: "April 3, 2018"
+output: html_document
+---
+
+---
+
+#### Contents:
+
+* [Example 1 - Linear SVM](#linear)
+* [Example 2 - RBF SVM](#nonlinear)
+* [Example 3 - Feature spaces](#space)
+* [Limma Example](#limma)
+
+This tutorial requires the `mlbench` package for toy data and the `kernlab` package for kernels and SVMs.
+
+---
+
+<a name="linear"/>
+
+### Example 1 - Linear SVM
+
+In this first example, we will build a linear SVM and apply it to some simple two-dimensional toy data to understand the basic concepts of support vectors and SVM classification. 
+
+##### Generate toy data
+
+```{r}
+
+##### Make toy data from two Gaussian distributions 
+
+# CONSTANTS
+kExamples = 150               # number of points (aka examples)
+kTrainPercent = .80           # percentage of data to be used for training
+
+# Use mlbench library for making fun distributions
+# RECOMMENDED: read the man page for mlbench.2dnormals()
+library(mlbench)
+
+# Make toy data from two Gaussian distributions
+gauss.data = mlbench.2dnormals(kExamples, cl = 2, r = 2)
+
+# Separate the matrix of examples (x) and vector of labels (y)
+x = gauss.data$x
+y = gauss.data$classes
+
+# Visualize the data
+plot(x, 
+     main = 'SVM toy data - two Gaussians',
+     pch = ifelse(y == 1, 2, 1))
+
+legend('topleft', 
+       c('Class 1 examples', 'Class 2 examples'),
+       pch = c(2, 1))
+
+```
+
+
+##### Train and test a linear SVM
+
+```{r message = F, warning = F}
+
+##### Make training and test sets for linear SVM classification
+  
+# Define training and test sets
+train.idx = sample(kExamples, kExamples * kTrainPercent)
+x.train = x[train.idx,]
+x.test = x[-train.idx,]
+y.train = y[train.idx]
+y.test = y[-train.idx]
+
+# Use the kernlab package for SVM
+# RECOMMENDED: Read the man page for ksvm()
+library(kernlab)
+
+##### Train a linear SVM
+linear.SVM = ksvm(x = x.train,
+                  y = y.train, 
+                  type = 'C-svc',              # C classification
+                  kernel = 'vanilladot',       # linear kernel
+                  C = 100)                     # regularization term
+
+# View a general summary of the SVM we trained
+linear.SVM
+table(Predicted = predict(linear.SVM, x.test), Actual = y.test)
+
+# NOTE: View all of the attributes that you can access with `attributes(my.SVM)`
+# Some examples:
+# alpha(my.SVM))                               # support vectors, alpha vector
+# alphaindex(my.SVM))                          # index of support vectors in matrix
+# b(my.SVM)                                    # intercept
+
+# Plot the classifier and highlight the support vectors
+plot(linear.SVM, data = x.train)
+
+```
+
+---
+
+<a name="nonlinear"/>
+
+### Example 2 - Non-linear SVM
+
+The following example is not linearly separable in two dimensions. We show how the kernel trick helps us make the data linearly separable in a transformed feature space.
+
+##### Generate toy data
+
+```{r}
+
+##### Make toy data that looks like a donut
+
+# Get new data points from mlbench library
+circle.data = mlbench.circle(kExamples)
+
+# Separate the matrices of examples (x) and labels (y)
+x = circle.data$x
+y = circle.data$classes
+
+# Visualize
+plot(x, 
+     main = 'SVM toy data - donut shaped',
+     pch = ifelse(y == 1, 1, 2))
+
+legend('topleft', 
+       c('Class 1 examples', 'Class 2 examples'),
+       pch = c(1, 2))
+
+```
+
+##### Train and test a non-linear SVM
+
+```{r message = F}
+
+##### Make training and test sets for SVM classification
+  
+# Define training and test sets
+train.idx = sample(kExamples, kExamples * kTrainPercent)
+x.train = x[train.idx,]
+x.test = x[-train.idx,]
+y.train = y[train.idx]
+y.test = y[-train.idx]
+
+##### Train a radial basis function (RBF) SVM
+rbf.SVM = ksvm(x = x.train,
+               y = y.train, 
+               type = 'C-svc',                 # C classification
+               kernel = 'rbfdot',              # radial basis kernel (Gaussian)
+               C = 10)                         # regularization term
+
+# View a general summary of the SVM we trained
+rbf.SVM
+table(Predicted = predict(rbf.SVM, x.test), Actual = y.test)
+
+# Plot the classifier and highlight the support vectors
+plot(rbf.SVM, data = x.train)
+
+```
+
+---
+
+<a name="space"/>
+
+### Example 3
+
+##### Understanding the transformed feature space
+
+```{r}
+# Visualize
+plot(x, 
+     main = 'Donut data in original feature space',
+     xlab = 'x_1',
+     ylab = 'x_2',
+     pch = ifelse(y == 1, 1, 2))
+
+legend('topleft', 
+       c('Class 1 examples', 'Class 2 examples'),
+       pch = c(1, 2))
+
+plot(x^2, 
+     main = 'Donut data in quadratic space',
+     xlab = '(x_1)^2',
+     ylab = '(x_2)^2',
+     pch = ifelse(y == 1, 1, 2))
+
+legend('topright', 
+       c('Class 1 examples', 'Class 2 examples'),
+       pch = c(1, 2))
+
+abline(a = .63, b = -1, col = 'red')
+
+
+``` 
+#### TODO
+
+Apply an SVM model to your data set. Discuss your procedure and results.
+
+---
+
+<a name="limma"/>
+
+##### Apply the modeling to T21 data
+
+```{r message = F}
+
+library(Biobase)
+library(ggplot2)
+#library(synapseClient)
+library(limma)
+
+#login
+#synapseLogin(username = 'username', password = 'password')
+
+# Load the .rds file
+#T21.data = synGet('syn12062973')
+local.file.path = "data/MLClassData/T21_plasma_metabolomics_maxage_filtered_eset.rds"
+T21.eset = readRDS(local.file.path)
+rm(local.file.path)
+
+met_data = exprs(T21.eset)
+sample_data = pData(T21.eset)
+sample_data$Gender = as.factor(sample_data$Gender)
+sample_data$Karyotype = as.factor(sample_data$Karyotype)
+sample_data$Batch = as.factor(sample_data$Batch)
+feature_data = fData(T21.eset)
+met_data_log2 = log2(met_data)
+
+# karyotype+batch+age+gender fit
+covariates <- sample_data[,c('Karyotype', 'Batch', 'Age', 'Gender')]
+covariates$Karyotype <- ifelse(covariates$Karyotype == "D21", 0,1)
+covariates$Gender <- ifelse(covariates$Gender == "Male", 0,1)
+covariates$Batch <- as.numeric(covariates$Batch)
+
+met_rb <-removeBatchEffect(met_data_log2, covariates = as.matrix(covariates))
+temp <- as.data.frame(cbind(met_rb[match("C03722", row.names(met_rb)),],covariates[,1]))
+colnames(temp) <- c("C03722", "Karyotype")
+temp <- temp[!is.na(temp$C03722),]
+boxplot(C03722~Karyotype,temp)
+
+# batch+age+gender fit
+covariates2 <- sample_data[,c('Batch', 'Age', 'Gender')]
+covariates2$Gender <- ifelse(covariates2$Gender == "Male", 0,1)
+covariates2$Batch <- as.numeric(covariates2$Batch)
+
+met_rb2 <-removeBatchEffect(met_data_log2, covariates = as.matrix(covariates2))
+temp2 <- as.data.frame(cbind(met_rb2[match("C03722", row.names(met_rb2)),],covariates[,1]))
+colnames(temp2) <- c("C03722", "Karyotype")
+temp2 <- temp2[!is.na(temp$C03722),]
+boxplot(C03722~Karyotype,temp2)
+
+```
+
+###### Applying SVM to PCa gene expression data to predict perineural invasion (PNI) status.
+
+
+## 1. Load PNI annotations and gene expression data, remove duplicate genes, log transform gene expression data, and filter genes with the highest variance.
+
+```{r}
+
+library(readr)
+library(tidyverse)
+library(limma)
+library(data.table)
+
+# load PNI annotations
+pni.anns <- readr::read_tsv("data/TCGA_PRAD_PNI_anns.txt", col_names = T, trim_ws = T) %>% as.data.frame()
+
+# convert patient IDs to row names and remove ID column
+row.names(pni.anns) <- pni.anns$Patient_ID
+#pni.anns <- pni.anns %>% dplyr::select(-"Patient_ID")
+
+# factor annotations (0 = PNI-, 1 = PNI+)
+pni.anns$PNI_status <- factor(pni.anns$PNI_status)
+
+# load gene expression data
+gex <- read_tsv("data/TCGA_PRAD_mrna_seq_v2_rsem.txt", col_names = T, trim_ws = T) %>% as.data.frame()
+
+## assign hugo symbols as rownames
+#row.names(gex) <- gex$Hugo_Symbol
+
+# looks like there are some duplicate gene names, so those must be removed before assigning the gene symbols as row names. which genes are duplicated?
+n_occur <- data.frame(table(gex$Hugo_Symbol))
+n_occur[n_occur$Freq > 1,]
+dups <- gex[gex$Hugo_Symbol %in% n_occur$Var1[n_occur$Freq > 1],]
+
+# MERGE ROWS W/ DUPLICATE GENES BY TAKING THE MEDIAN EXPRESSION into new data frame for unique genes
+gex.uniq <- gex %>% setDT()
+
+## Sort the data frame by the Hugo_symbol column
+gex.uniq <- gex.uniq[order(gex.uniq$Hugo_Symbol)]
+
+## Combine duplicated rows by taking the median value of each patient's expression for that gene
+gex.uniq <- gex.uniq[, lapply(.SD, median, na.rm = TRUE), by = Hugo_Symbol]
+
+## convert back into a data frame
+gex.uniq <- gex.uniq %>% as.data.frame()
+
+## assign hugo symbols as rownames
+#row.names(gex.uniq) <- gex.uniq$Hugo_Symbol
+
+# why are there empty hugo values? which rows?
+anyNA(gex.uniq$Hugo_Symbol)
+empties <- gex.uniq[is.na(gex.uniq$Hugo_Symbol),]
+
+# remove them
+gex.uniq <- gex.uniq[!is.na(gex.uniq$Hugo_Symbol),]
+
+# assign hugo symbols as rownames, remove Hugo and Entrez ID row
+row.names(gex.uniq) <- gex.uniq$Hugo_Symbol
+gex.uniq <- gex.uniq %>% dplyr::select(-"Hugo_Symbol", -"Entrez_Gene_Id")
+
+# remove "-01"s from colnames so they match PNI anns
+colnames(gex.uniq) <- gsub("-01$", "", colnames(gex.uniq))
+
+# remove gene expression data that doesn't have PNI anns
+gex.uniq <- gex.uniq[,row.names(pni.anns)]
+
+# log transform gene expression data
+gex.uniq.log2 <- log2(gex.uniq +1)
+
+# filter out genes with 0 expression in more than 75% of patients
+gex.uniq.log2 <- gex.uniq.log2[rowSums(gex.uniq.log2 == 0) <= 0.75*(length(gex.uniq.log2)),] #
+
+# Keep 5000 genes with highest variance
+gex.uniq.log2 <- gex.uniq.log2[order(apply(X = gex.uniq.log2, 
+                                                  MARGIN = 1,           # apply function to rows (1) or columns (2)
+                                                  FUN = var),
+                                            decreasing = T),][1:5000,]
+
+# clean up
+rm(empties, n_occur, dups)
+
+```
+
+
+## 2. Subset samples into train and test datasets
+
+```{r}
+
+# for reproducibility
+set.seed(0)   
+
+# seperate out PNI+ and - samples
+pni.pos.gex <- gex.uniq.log2[,row.names(pni.anns)[pni.anns$PNI_status == 1]] %>% t() %>% as.data.frame()
+pni.neg.gex <- gex.uniq.log2[,row.names(pni.anns)[pni.anns$PNI_status == 0]] %>% t() %>% as.data.frame()
+
+# partition PNI+ samples and PNI- samples into test and train data sets
+## PNI+
+pni.pos.train <- pni.pos.gex %>% dplyr::sample_n(., size = nrow(pni.neg.gex)*.8, replace = F)
+pos.train.idx <- row.names(pni.pos.train)
+pni.pos.test <- pni.pos.gex[-which(row.names(pni.pos.gex) %in% c(pos.train.idx)),]
+
+## PNI-
+pni.neg.train <- pni.neg.gex %>% dplyr::sample_n(., size = nrow(pni.neg.gex)*.8, replace = F)
+neg.train.idx <- row.names(pni.neg.train)
+pni.neg.test <- pni.neg.gex[-which(row.names(pni.neg.gex) %in% c(neg.train.idx)),]
+
+# make sure no samples overlap
+intersect(row.names(pni.pos.train), row.names(pni.pos.test))
+intersect(row.names(pni.neg.train), row.names(pni.neg.test))
+
+# make sure genes are in the same order before merging w/ rbind
+identical(colnames(pni.neg.train), colnames(pni.pos.train))
+identical(colnames(pni.neg.test), colnames(pni.pos.test))
+
+# merge pni neg and pos training and test data into 1 data frame
+## TRAIN data
+train <- rbind(pni.neg.train, pni.pos.train)
+dim(train)
+
+## TEST data
+test <- rbind(pni.neg.test, pni.pos.test)
+dim(test)
+
+# extract PNI anns for training and testing data
+train.anns <- pni.anns[row.names(train),] %>% dplyr::select("PNI_status")
+test.anns <- pni.anns[row.names(test),] %>% dplyr::select("PNI_status")
+
+```
+
+
+## 3. Visualize data with principle components analysis
+
+```{r}
+
+library(FactoMineR)   # PCA
+library(ggplot2)
+
+# transpose gene expression data so that rows are IDs and columns are genes
+gex.uniq.log2.t <- gex.uniq.log2 %>% t()
+
+# trying it using all data
+gex.plus.anns <- merge(gex.uniq.log2.t, pni.anns, by = 0)
+row.names(gex.plus.anns) <- gex.plus.anns$Row.names
+dim(gex.plus.anns)
+gex.plus.anns <- gex.plus.anns %>% dplyr::select(-"Row.names", -"Patient_ID")
+dim(gex.plus.anns)
+
+# visualize the data w/ PCA? input: data frame with n rows (individuals) and p columns (features)
+pni.pca <- FactoMineR::PCA(gex.plus.anns, 
+                         ncp = 500, 
+                         quali.sup = "PNI_status", 
+                         scale.unit = T, 
+                         graph = F)
+
+# how many components needed to account for 90% of the variance between PNI+ and PNI-?
+pni.pca$eig     # looks like 32 components
+
+# look at loadings
+loadings <- sweep(pni.pca$var$coord,2,sqrt(pni.pca$eig[1:ncol(pni.pca$var$coord),1]),FUN="/")
+loadings <- sort(loadings[,1])
+
+# extract all PCs for plotting
+all.pcs <- pni.pca$ind$coord %>% as.data.frame()
+
+# PCA plots! Want to find the two PCs that best stratify PNI+ and PNI-
+pca12.pni <- ggplot(all.pcs, aes(x = Dim.1, y =  Dim.2, color = gex.plus.anns$PNI_status)) +
+  geom_point(aes(shape = gex.plus.anns$PNI_status)) +
+  theme_minimal()
+pca12.pni
+
+pca13.pni <- ggplot(all.pcs, aes(x = Dim.1, y =  Dim.3, color = gex.plus.anns$PNI_status)) +
+  geom_point(aes(shape = gex.plus.anns$PNI_status)) +
+  theme_minimal()
+pca13.pni
+
+pca14.pni <- ggplot(all.pcs, aes(x = Dim.1, y =  Dim.4, color = gex.plus.anns$PNI_status)) +
+  geom_point(aes(shape = gex.plus.anns$PNI_status)) +
+  theme_minimal()
+pca14.pni
+
+pca23.pni <- ggplot(all.pcs, aes(x = Dim.2, y =  Dim.3, color = gex.plus.anns$PNI_status)) +
+  geom_point(aes(shape = gex.plus.anns$PNI_status)) +
+  theme_minimal()
+pca23.pni        
+
+pca24.pni <- ggplot(all.pcs, aes(x = Dim.2, y =  Dim.4, color = gex.plus.anns$PNI_status)) +
+  geom_point(aes(shape = gex.plus.anns$PNI_status)) +
+  theme_minimal()
+pca24.pni     
+
+pca34.pni <- ggplot(all.pcs, aes(x = Dim.3, y =  Dim.4, color = gex.plus.anns$PNI_status)) +
+  geom_point(aes(shape = gex.plus.anns$PNI_status)) +
+  theme_minimal()
+pca34.pni   # this one starts to separate out PNI+/- so I'll use PCs 3 and 4
+
+pca.pni <- ggplot(all.pcs, aes(x = Dim.3, y =  Dim.7, color = gex.plus.anns$PNI_status)) +
+  geom_point(aes(shape = gex.plus.anns$PNI_status)) +
+  theme_minimal()
+pca.pni
+
+# make new df w/ pc3 and pc4 - this will be my input for the SVM
+pc3.pc4.df <- all.pcs %>% dplyr::select("Dim.3", "Dim.4")
+
+```
+
+
+### 4. Train and test a linear SVM
+
+```{r message = F, warning = F}
+
+# Use the kernlab package for SVM
+# RECOMMENDED: Read the man page for ksvm()
+library(kernlab)
+
+# subset chosen PCs into train and test 
+pc.train <- pc3.pc4.df[row.names(train),]
+pc.test <- pc3.pc4.df[row.names(test),]
+
+# make sure features are in the same order in test and train data sets, abort mission if not identical
+ifelse(identical(colnames(pc.test), colnames(pc.train)), print("Test/train features are in identical order!"), stop(paste0("order of test and train features don't match :("), call. = F))
+
+ifelse(identical(row.names(pc.train), row.names(train.anns)), print("Train data and annotation IDs are in identical order!"), stop(paste0("order of train data and annotation IDs don't match :("),call. = F))
+
+ifelse(identical(row.names(pc.test), row.names(test.anns)), print("Test data and annotation IDs are in identical order!"), stop(paste0("order of test data and annotation IDs don't match :("),call. = F))
+
+##### Train a linear SVM
+linear.SVM.pni <-  kernlab::ksvm(x = as.matrix(pc.train),     # features
+                                 y = train.anns,              # outcome/response
+                                 type = 'C-svc',              # C classification type support vector
+                                 kernel = 'vanilladot',       # linear kernel
+                                 C = 10)                      # regularization term
+
+# View a general summary of the SVM
+linear.SVM.pni
+table(Predicted = kernlab::predict(linear.SVM.pni, pc.test), Actual = t(test.anns))
+
+# NOTE: View all of the attributes that you can access with `attributes(my.SVM)`
+# Some examples:
+# alpha(my.SVM))                               # support vectors, alpha vector
+# alphaindex(my.SVM)                          # index of support vectors in matrix
+# b(my.SVM)                                    # intercept
+
+# Plot the classifier and highlight the support vectors
+plot(linear.SVM.pni, data = as.matrix(pc.train))
+
+```
+
+
+## 5. Loop to try ALL kernel methods in kernlab::ksvm() function
+
+```{r}
+
+# define training and testing data and annotations
+svm.train <- pc.train
+svm.train.anns <- train.anns
+svm.test <- pc.test
+svm.test.anns <- test.anns
+
+# what type of data is SVM being trained on? this variable will be assigned to the final SVM object name
+input <- "pca"
+
+# create character vector with each kernel method
+kerns <- c("rbfdot",            # Radial Basis kernel "Gaussian"
+           "polydot",           # Polynomial kernel
+           "vanilladot",        # Linear kernel
+           "tanhdot",           # Hyperbolic tangent kernel
+           "laplacedot",        # Laplacian kernel
+           "besseldot",         # Bessel kernel
+           "anovadot",          # NOVA RBF kernel
+           "splinedot"          # Spline kernel
+           )
+
+# vector to hold SVM performance matrices
+svm.summaries <- list()
+svm.tables <- list()
+
+# make sure features are in the same order in test and train data sets, abort mission if not identical
+ifelse(identical(colnames(svm.train), colnames(svm.test)), print("Test/train features are in identical order!"), stop(paste0("order of test and train features don't match :("), call. = F))
+ifelse(identical(row.names(svm.train), row.names(svm.train.anns)), print("Train data and annotation IDs are in identical order!"), stop(paste0("order of train data and annotation IDs don't match :("),call. = F))
+ifelse(identical(row.names(svm.test), row.names(svm.test.anns)), print("Test data and annotation IDs are in identical order!"), stop(paste0("order of test data and annotation IDs don't match :("),call. = F))
+
+# loop to test all kernel methods and save each SVM as uniquely named objects
+for(i in kerns){
+  
+  # fit SVM
+  svm <- kernlab::ksvm(x = as.matrix(svm.train),                # features
+                                   y = svm.train.anns,          # outcome/response
+                                   type = 'C-svc',              # C classification type support vector
+                                   kernel = i,                  # kernel
+                                   C = 10)                      # regularization term
+  
+  # define name of object to store specific SVM in
+  kmethod <- paste0("SVM.", i, ".", input)
+  
+  # save SVMs individually 
+  ## each SVM will be saved as object called "SVM.[kernel method].[input data type]"
+  assign(kmethod, svm)
+  
+  # View a general summary of the SVM
+  svm.summaries[[i]] <- print(svm)
+  svm.tables[[i]] <- table(Predicted = kernlab::predict(svm, as.matrix(svm.test)), Actual = t(svm.test.anns))
+
+  # Plot the classifier and highlight the support vectors
+  plot(svm, data = as.matrix(svm.train), sub = paste0(i))
+  
+}
+
+svm.summaries
+svm.tables
+
+
+```
+
+
+## 6. Trying a different approach - train SVM on gene expression data for the 5000 genes with highest variance instead of principle components
+
+```{r}
+library(kernlab)
+
+# define training and testing data and annotations
+# split gene expression data into train/test earlier, so can skip that step (objects were called "train" and "test")
+svm.train <- train
+svm.train.anns <- train.anns
+svm.test <- test
+svm.test.anns <- test.anns
+
+# what type of data is SVM being trained on? this variable will be assigned to the final SVM object name
+input <- "gex.topvar"
+
+# create character vector with each kernel method
+kerns <- c("rbfdot",            # Radial Basis kernel "Gaussian"
+           "polydot",           # Polynomial kernel
+           "vanilladot",        # Linear kernel
+           "tanhdot",           # Hyperbolic tangent kernel
+           "laplacedot",        # Laplacian kernel
+           "besseldot",         # Bessel kernel
+           "anovadot",          # NOVA RBF kernel
+           "splinedot"          # Spline kernel
+           )
+
+# vector to hold SVM performance matrices
+svm.summaries.gex <- list()
+svm.tables.gex <- list()
+
+# multiple checks to make sure features are in the same order in test and train data sets, abort mission if not identical
+ifelse(identical(colnames(svm.train), colnames(svm.test)), print("Test/train features are in identical order!"), stop(paste0("order of test and train features don't match :("), call. = F))
+
+ifelse(identical(row.names(svm.train), row.names(svm.train.anns)), print("Train data and annotation IDs are in identical order!"), stop(paste0("order of train data and annotation IDs don't match :("),call. = F))
+
+ifelse(identical(row.names(svm.test), row.names(svm.test.anns)), print("Test data and annotation IDs are in identical order!"), stop(paste0("order of test data and annotation IDs don't match :("),call. = F))
+
+
+# loop to test all kernel methods and save each SVM as uniquely named objects
+for(i in kerns){
+  
+  # fit SVM
+  svm <- kernlab::ksvm(x = as.matrix(svm.train),                # features
+                                   y = svm.train.anns,          # outcome/response
+                                   type = 'C-svc',              # C classification type support vector
+                                   kernel = i,                  # kernel
+                                   C = 1)                       # regularization term
+  
+  # define name of object to store specific SVM in
+  kmethod <- paste0("SVM.", i, ".", input)
+  
+  # save SVMs individually 
+  ## each SVM will be saved as object called "SVM.[kernel method].[input data type]"
+  assign(kmethod, svm)
+  
+  # View a general summary of the SVM
+  svm.summaries.gex[[i]] <- print(svm)
+  svm.tables.gex[[i]] <- table(Predicted = kernlab::predict(svm, as.matrix(svm.test)), Actual = t(svm.test.anns))
+
+  # Plot the classifier and highlight the support vectors
+  plot(svm, data = as.matrix(svm.train), sub = paste0(i))
+  plot(svm)
+  
+}
+
+svm.summaries.gex
+svm.tables.gex
+
+```
+
+
+
+
