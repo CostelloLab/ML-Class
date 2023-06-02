@@ -1,0 +1,372 @@
+---
+title: "CPBS 7630 Module 5 - Bagging and boosting"
+date: "April 23, 2018"
+output: html_document
+---
+
+---
+
+#### Contents:
+
+* [Boosting](#boosting)
+* [Bagging](#bagging)
+
+---
+
+<a name="boosting"/>
+
+This template requires the [`adabag` package](https://www.jstatsoft.org/index.php/jss/article/view/v054i02/adabag_An_R_Package_for_Classification_with_Boosting_and_Bagging.pdf) for boosting and bagging functions, `curatedOvarianData` for a real-life data set, and `rpart.plot` for pretty plotting regression trees. All packages are available on CRAN.
+
+### Boosting
+
+##### Small, toy data set
+
+Here, we'll use boosting on the `iris` data set to classify examples by the species of iris that they came from. First, we load the data set and make some exploratory plots.
+
+```{r message = F, out.width = '400px', fig.show = 'hold'}
+
+# Load iris data set
+data(iris)
+
+# Plot the 4 variables included in the data set
+#my.layout = layout(cbind(1,2), widths = c(7,3))
+par(mar = c(0,0,0,0))
+plot(iris[,-5], col = c(3:5)[iris$Species], pch = c(15:17)[iris$Species])
+plot.new()
+legend('center', legend = levels(iris$Species), title = 'Iris species',
+       col = 3:5, pch = 15:17)
+
+```
+
+``` {r eval = F}
+
+# These lines would plot just two of the variables, sepal length and sepal width,
+# and label the examples by their index
+plot(iris[,1:2], col = c(3:5)[iris$Species], pch = c(15:17)[iris$Species])
+text(iris[,1:2], labels=1:150)
+
+```
+
+We can use the `adabag` R package for its `boosting()` and `bagging()` functions. Read the manual pages for each function to understand additional parameters not included in these examples.
+
+```{r message = F, warning = F, fig.align = 'center'}
+
+library(adabag)
+library(rpart.plot)
+
+# Perform boosting on the iris data
+iris.adaboost <- boosting(Species~., data = iris, boos = TRUE, mfinal = 10)
+
+# Pretty plot one of the trees as an example (with rpart.plot package)
+prp(iris.adaboost$trees[[5]])
+```
+
+The `boosting()` function will iterate over the data as many times as we define in the `mfinal` parameter. Each iteration produces one tree. Explore the `iris.adaboost` data object. What information is contained in this structure?
+
+In theory, boosting should give us better performance at each iteration. Was this true? When did the performance max out? One way to address these questions is by visualizing the number of examples that we incorrectly classified at each iteration.
+
+```{r message = F, out.width = '400px', fig.align = 'center'}
+
+# Plot the number of misclassified examples by iteration
+errors = errorevol(iris.adaboost, newdata = iris)$error   # percentage error
+plot(errors*nrow(iris), 
+     main = 'Adaboost error on iris data',
+     xlab = 'Iteration', ylab = 'Number of misclassified examples',
+     pch = 19, type = 'b')
+legend('topright', legend = 'Adaboost error', col = 'black', pch = 19)
+
+```
+
+``````{r message = F, out.width = '400px'}
+# Compare correct/incorrect class assignments at iteration 1, 4, 5 and 10
+true.classes = iris$Species
+for (i in c(1,4,5,10)){
+     class.assignments = boosting(Species~., data = iris, boos = TRUE, mfinal = i)$class
+     correct = class.assignments == true.classes
+     plot.title = paste0('Correctly classified examples at iteration ', i)
+     plot(iris[,1:2], col = c(3:5)[iris$Species], pch = ifelse(correct, 19,1),
+          main = plot.title)
+     legend('topright', legend = c('correct', 'incorrect'), pch = c(19,1), col = 'darkgray')
+}
+
+```
+
+### TODO
+
+Implement the bagging algorithm and apply it to your own data set. You may use the `rpart()` function. *Show and summarize* how the performance acheived by the ensemble compare to the performance of a single classifier.
+s
+References: [Adabag paper](https://www.jstatsoft.org/index.php/jss/article/view/v054i02/adabag_An_R_Package_for_Classification_with_Boosting_and_Bagging.pdf), which provides an overview of boosting and bagging algorithms.
+
+##### TCGA prostate cancer (PRAD) data set with perineural invasion (PNI) annotations
+
+### 1. Load PNI annotations and gene expression data, remove duplicate genes, log transform
+```{r}
+library(readr)
+library(tidyverse)
+library(curatedPCaData)
+library(limma)
+
+# load PNI annotations
+pni.anns <- read_tsv("data/TCGA_PRAD_PNI_anns.txt", col_names = T, trim_ws = T) %>% as.data.frame()
+
+# convert patient IDs to row names and remove ID column
+row.names(pni.anns) <- pni.anns$Patient_ID
+#pni.anns <- pni.anns %>% dplyr::select(-"Patient_ID")
+
+# factor anns
+#pni.anns$PNI_status <- factor(pni.anns$PNI_status)
+
+# convert anns to character vector
+# pni.anns <- pni.anns %>% mutate(PNI_status = 
+#                                   case_when(
+#                                     grepl(0, pni.anns$PNI_status) ~ "PNIneg",
+#                                     grepl(1, pni.anns$PNI_status) ~ "PNIpos"
+#                                   ))
+
+# load gene expression data
+gex <- read_tsv("data/TCGA_PRAD_mrna_seq_v2_rsem.txt", col_names = T, trim_ws = T) %>% as.data.frame()
+
+# which genes are duplicated
+n_occur <- data.frame(table(gex$Hugo_Symbol))
+n_occur[n_occur$Freq > 1,]
+dups <- gex[gex$Hugo_Symbol %in% n_occur$Var1[n_occur$Freq > 1],]
+
+# the dup expression values are all very close so I am just going to keep the first occurrence of each b/c idk how to do the median as a new row
+gex.uniq <- gex %>% dplyr::distinct(Hugo_Symbol, .keep_all = T)
+
+## assign hugo symbols as rownames
+#row.names(gex.uniq) <- gex.uniq$Hugo_Symbol
+
+# why are there empty hugo values? which rows?
+anyNA(gex.uniq$Hugo_Symbol)
+empties <- gex.uniq[is.na(gex.uniq$Hugo_Symbol),]
+
+# remove them
+gex.uniq <- gex.uniq[!is.na(gex.uniq$Hugo_Symbol),]
+
+# assign hugo symbols as rownames, remove Hugo and Entrez ID row
+row.names(gex.uniq) <- gex.uniq$Hugo_Symbol
+gex.uniq <- gex.uniq %>% dplyr::select(-"Hugo_Symbol", -"Entrez_Gene_Id")
+
+# remove "-01"s from colnames so they match PNI anns
+colnames(gex.uniq) <- gsub("-01$", "", colnames(gex.uniq))
+
+# remove gene expression data that doesn't have PNI anns
+gex.uniq <- gex.uniq[,row.names(pni.anns)]
+
+# log transform gene expression data
+gex.uniq.log2 <- log2(gex.uniq +1) #%>% t() %>% as.data.frame()
+
+# Keep 5000 genes with highest variance
+gex.uniq.log2.topvar <- gex.uniq.log2[order(apply(gex.uniq.log2, 1, var), decreasing = T),][1:5000,] #%>% t() %>% as.data.frame()
+
+gex.uniq.log2 <- gex.uniq.log2.topvar
+
+```
+
+### 2. Subset samples into train and test datasets
+```{r}
+
+library(caret)
+
+# for reproducibility
+set.seed(0)   
+
+# seperate out PNI+ and - samples
+pni.pos.gex <- gex.uniq.log2[,row.names(pni.anns)[pni.anns$PNI_status == 1]] %>% t() %>% as.data.frame()
+pni.neg.gex <- gex.uniq.log2[,row.names(pni.anns)[pni.anns$PNI_status == 0]] %>% t() %>% as.data.frame()
+
+# partition PNI+ samples and PNI- samples into test and train data sets
+pni.pos.train <- pni.pos.gex %>% dplyr::sample_n(., size = nrow(pni.neg.gex)*.8, replace = F)
+pos.train.idx <- row.names(pni.pos.train)
+pni.pos.test <- pni.pos.gex[-which(row.names(pni.pos.gex) %in% c(pos.train.idx)),]
+
+pni.neg.train <- pni.neg.gex %>% dplyr::sample_n(., size = nrow(pni.neg.gex)*.8, replace = F)
+neg.train.idx <- row.names(pni.neg.train)
+pni.neg.test <- pni.neg.gex[-which(row.names(pni.neg.gex) %in% c(neg.train.idx)),]
+
+# make sure no samples overlap
+intersect(row.names(pni.pos.train), row.names(pni.pos.test))
+intersect(row.names(pni.neg.train), row.names(pni.neg.test))
+
+# make sure genes are in the same order
+identical(colnames(pni.neg.train), colnames(pni.pos.train))
+identical(colnames(pni.neg.test), colnames(pni.pos.test))
+
+# merge pni neg and pos training and test data into 1 dataframe
+train <- rbind(pni.neg.train, pni.pos.train)
+dim(train)
+test <- rbind(pni.neg.test, pni.pos.test)
+dim(test)
+
+# extract PNI anns for training data
+train.anns <- pni.anns[row.names(train),] %>% dplyr::select("PNI_status")
+test.anns <- pni.anns[row.names(test),] %>% dplyr::select("PNI_status")
+
+```
+
+### 3. Create a single classifier random forest
+```{r}
+
+library(randomForest)
+library(ggRandomForests)
+library(party)
+
+# make sure samples are in the correct order
+identical(row.names(test.anns), row.names(test))
+
+pni.rf <- randomForest(x = train.plus.anns[,1:ncol(train.plus.anns)-1]+1,       # train features
+                       y = train.plus.anns$PNI_status,                          # train outcome/response
+                       xtest = test+1,                                          # test features
+                       ytest = factor(test.anns$PNI_status),                    # test outcome/response
+                       keep.forest = T                                          # only necessary if using xtest and ytest and you want to retain the OG forest
+                       )
+
+print(pni.rf)
+
+# which genes are most important for predicting ?
+importance <- pni.rf$importance %>% as.data.frame() %>% rownames_to_column(var = "gene") 
+importance <- importance[order(importance$MeanDecreaseGini,  decreasing = T),] %>% as.data.frame()
+head(importance, 10)
+
+# plot important features
+varImpPlot(pni.rf, sort = T, n.var = 20)
+
+# plot forest error
+plot(pni.rf, type = "l", log = "y")
+
+# plot example tree using party package
+cf <- party::cforest(PNI_status~., data = train.plus.anns[,c(good.features, 'PNI_status')])
+pt <- prettytree(cf@ensemble[[1]], names(cf@data@get("input"))) 
+nt <- new("BinaryTree") 
+nt@tree <- pt 
+nt@data <- cf@data 
+nt@responses <- cf@responses 
+plot(nt, type = "simple")
+
+
+```
+
+### 4. Perform boosting
+```{r message = F, out.width = '400px', warning = F, fig.align = 'center'}
+
+library(adabag)
+
+# merge PNI status and train data, fix rownames
+train.plus.anns <- merge(train, train.anns, by = 0)
+row.names(train.plus.anns) <- train.plus.anns$Row.names
+dim(train.plus.anns)
+train.plus.anns <- train.plus.anns %>% dplyr::select(-"Row.names")
+dim(train.plus.anns)
+
+# OPTIONAL: Use lasso for quick feature selection
+# (I'm doing this to get a very reduced set of features very quickly)
+library(glmnet)
+lasso.fit <- cv.glmnet(x = as.matrix(train.plus.anns[,-ncol(train.plus.anns)]),
+                      y = train.plus.anns$PNI_status,
+                      family = 'binomial',
+                      alpha = 1)
+  
+# Get the features with non-zero coefficients
+coefs <- coef(lasso.fit, s='lambda.min', exact=TRUE)
+idx <- which(coefs !=0)
+good.features <-  row.names(coefs)[idx[2:length(idx)]]
+
+# factor PNI status
+train.plus.anns$PNI_status <- factor(train.plus.anns$PNI_status)
+
+# Perform boosting on the data to classify tumors as PNI+ or PNI-
+pni.adaboost <- boosting(PNI_status ~., 
+                         data = train.plus.anns[,c(good.features, 'PNI_status')], 
+                         boos = T, 
+                         mfinal = 48,
+                         control = (minsplit = 0),
+                         type = "vector"
+                         )
+
+# plot error by iteration - ggplot cannot plot boosting objects (or at least not easily) so must use base R graphics instead
+errors <- errorevol(pni.adaboost, newdata = train.plus.anns)$error
+plot(errors*nrow(train.plus.anns), 
+     main = 'Adaboost error on TCGA prostate cancer data PNI predictions',
+     xlab = 'Iteration', ylab = 'Number of misclassified examples',
+     pch = 19, type = 'b')
+legend('topright', legend = 'Adaboost error', col = 'black', pch = 19)
+
+```
+
+### 5. Visualize boosted decision trees
+``````{r message = F, out.width = '400px'}
+
+library(rpart.plot)
+
+# As above, visualize correct/incorrect examples at different iterations
+true.classes = as.character(train.plus.anns$PNI_status)
+for (i in c(1,4,7,11)){
+     class.assignments <- boosting(PNI_status ~ ., data = train.plus.anns[,c(good.features, 'PNI_status')], 
+                                  boos = T, mfinal = i, type = "vector")$class
+     correct <-  class.assignments == true.classes
+     plot.title <-  paste0('Correctly classified examples at iteration ', i)
+     plot(train.plus.anns[,good.features[1:5]],
+          col = ifelse(train.plus.anns$PNI_status =='1', 'red', 'blue'),
+          pch = ifelse(correct, 19,1),
+          main = plot.title)
+     legend('topright', legend = c('correct', 'incorrect'), pch = c(19,1), col = 'darkgray')
+     
+}
+
+# Visualize one of the trees to see the decision stumps
+prp(pni.adaboost$trees[[1]])
+prp(pni.adaboost$trees[[2]])
+prp(pni.adaboost$trees[[1]], type = 1, fallen.leaves = T)
+
+```
+
+### 6. Perform bagging
+```{r message = F, out.width = '400px', fig.align = 'center'}
+
+# bagging TCGA PRAD data
+tcga.bagging <- bagging(PNI_status ~ ., data = train.plus.anns[,c(good.features, 'PNI_status')], 
+                       boos = T, mfinal = 12)
+
+# plot # of misclassified examples by iteration
+errors <- errorevol(tcga.bagging, newdata = train.plus.anns)$error
+plot(errors*nrow(train.plus.anns), 
+     main = 'Bagging error on TCGA prostate cancer data PNI status predictions',
+     xlab = 'Iteration', ylab = 'Number of misclassified examples',
+     pch = 19, type = 'b')
+legend('topright', legend = 'Bagging error', col = 'black', pch = 19)
+
+# which features are most important?
+tcga.bagging$importance
+
+```
+
+### 7. Visualize bagged decision trees
+```{r}
+
+# visualize correct/incorrect examples at different iterations
+true.classes <- as.character(train.plus.anns$PNI_status)
+for (i in c(1,4,7,11)){
+
+     class.assignments <- bagging(PNI_status ~ ., 
+                                  data = train.plus.anns[,c(good.features, 'PNI_status')],
+                                  boos = T, 
+                                  mfinal = 12)$class
+     
+     correct <- class.assignments == true.classes
+     
+     plot.title <-  paste0('Correctly classified examples at iteration ', i)
+     
+     plot(train.plus.anns[,good.features[1:5]],
+          col = ifelse(train.plus.anns$PNI_status =='1', 'red', 'blue'),
+          pch = ifelse(correct, 19,1),
+          main = plot.title)
+     legend('topright', legend = c('correct', 'incorrect'), pch = c(19,1), col = 'darkgray')
+     
+}
+
+# visualize one of the trees to see the decision stumps
+prp(pni.adaboost$trees[[1]], type = 1, fallen.leaves = T)
+
+```
+
